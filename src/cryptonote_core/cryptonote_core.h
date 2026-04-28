@@ -62,13 +62,14 @@ namespace cryptonote
      const size_t long_term_block_weight_window;
    };
 
-  extern const command_line::arg_descriptor<std::string, false, true, 2> arg_data_dir;
+  extern const command_line::arg_descriptor<std::string, false, true, 3> arg_data_dir;
   extern const command_line::arg_descriptor<bool, false> arg_testnet_on;
   extern const command_line::arg_descriptor<bool, false> arg_stagenet_on;
   extern const command_line::arg_descriptor<bool, false> arg_regtest_on;
   extern const command_line::arg_descriptor<difficulty_type> arg_fixed_difficulty;
   extern const command_line::arg_descriptor<bool> arg_offline;
   extern const command_line::arg_descriptor<size_t> arg_block_download_max_size;
+  extern const command_line::arg_descriptor<size_t> arg_span_limit;
   extern const command_line::arg_descriptor<bool> arg_sync_pruned_blocks;
 
   /************************************************************************/
@@ -227,15 +228,15 @@ namespace cryptonote
       *
       * @return true if the block was added to the main chain, otherwise false
       */
-     virtual bool handle_block_found(block& b, block_verification_context &bvc) override;
+     bool handle_block_found(block& b, block_verification_context &bvc) final;
 
      /**
       * @copydoc Blockchain::create_block_template
       *
       * @note see Blockchain::create_block_template
       */
-     virtual bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, uint64_t &cumulative_weight, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash) override;
-     virtual bool get_block_template(block& b, const crypto::hash *prev_block, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, uint64_t &cumulative_weight, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
+     bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, uint64_t &cumulative_weight, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash) final;
+     bool get_block_template(block& b, const crypto::hash *prev_block, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, uint64_t& expected_reward, uint64_t &cumulative_weight, const blobdata& ex_nonce, uint64_t &seed_height, crypto::hash &seed_hash);
 
      /**
       * @copydoc Blockchain::get_miner_data
@@ -248,7 +249,7 @@ namespace cryptonote
       * @brief called when a transaction is relayed.
       * @note Should only be invoked from `levin_notify`.
       */
-     virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay) final;
+     void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay) final;
 
 
      /**
@@ -274,6 +275,15 @@ namespace cryptonote
       * @param desc return-by-reference the command line options set to add to
       */
      static void init_options(boost::program_options::options_description& desc);
+
+     /**
+      * @brief resolves the network type based on command line arguments
+      * @param vm variables map
+      * @return network type corresponding to arg_{testnet,stagenet,regtest}_on, defaulting to MAINNET
+      * @throw std::runtime_error if more than 1 of arg_{testnet,stagenet,regtest}_on is present
+      * @throw boost::bad_any_cast if arg_{testnet,stagenet,regtest}_on weren't added to vm
+      */
+     static network_type get_network_type_from_args(const boost::program_options::variables_map& vm);
 
      /**
       * @brief initializes the core as needed
@@ -340,7 +350,7 @@ namespace cryptonote
       *
       * @note see Blockchain::get_current_blockchain_height()
       */
-     virtual uint64_t get_current_blockchain_height() const final;
+     uint64_t get_current_blockchain_height() const final;
 
      /**
       * @brief get the hash and height of the most recent block
@@ -671,7 +681,7 @@ namespace cryptonote
       *
       * @return core synchronization status
       */
-     virtual bool is_synchronized() const final;
+     bool is_synchronized() const final;
 
      /**
       * @copydoc miner::on_synchronized
@@ -794,9 +804,13 @@ namespace cryptonote
      /**
       * @brief get the number of blocks to sync in one go
       *
+      * @param height the height that we want to get_block_sync_size for
+      * @param max_average_of_blocksize_in_queue is max average of block size in batches in the queue
+      * we are downloading in current active connections.
+      *
       * @return the number of blocks to sync in one go
       */
-     size_t get_block_sync_size(uint64_t height) const;
+     size_t get_block_sync_size(uint64_t height, const uint64_t max_average_of_blocksize_in_queue = 0) const;
 
      /**
       * @brief get the sum of coinbase tx amounts between blocks
@@ -897,7 +911,7 @@ namespace cryptonote
       *
       * @return true iff success, false otherwise
       */
-     bool get_txpool_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes);
+     bool get_txpool_complement(std::vector<crypto::hash> hashes, std::vector<cryptonote::blobdata> &txes);
 
      /**
       * @brief validates some simple properties of a transaction
@@ -1098,6 +1112,7 @@ namespace cryptonote
      bool m_disable_dns_checkpoints;
 
      size_t block_sync_size;
+     std::uint64_t batch_max_weight;
 
      time_t start_time;
 

@@ -157,6 +157,8 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_ip);
       command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_port);
       command_line::add_arg(core_settings, daemon_args::arg_zmq_pub);
+      command_line::add_arg(core_settings, daemon_args::arg_confirm_zmq_rpc_external_bind);
+      command_line::add_arg(core_settings, daemon_args::arg_restricted_zmq_rpc);
       command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_disabled);
       command_line::add_arg(core_settings, daemonizer::arg_non_interactive);
 
@@ -238,10 +240,8 @@ int main(int argc, char const * argv[])
       return 1;
     }
 
-    const bool testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-    const bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-    const bool regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
-    if (testnet + stagenet + regtest > 1)
+    try { cryptonote::core::get_network_type_from_args(vm); }
+    catch (const std::runtime_error&)
     {
       std::cerr << "Can't specify more than one of --testnet and --stagenet and --regtest" << ENDL;
       return 1;
@@ -290,10 +290,6 @@ int main(int argc, char const * argv[])
 
     // after logs initialized
     tools::create_directories_if_necessary(data_dir.string());
-
-#ifdef STACK_TRACE
-    tools::set_stack_trace_log(log_file_path.filename().string());
-#endif // STACK_TRACE
 
     if (!command_line::is_arg_defaulted(vm, daemon_args::arg_max_concurrency))
       tools::set_max_concurrency(command_line::get_arg(vm, daemon_args::arg_max_concurrency));

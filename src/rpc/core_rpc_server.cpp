@@ -350,7 +350,7 @@ namespace cryptonote
       http_login.emplace(std::move(rpc_config->login->username), std::move(rpc_config->login->password).password());
 
     if (m_rpc_payment)
-      m_net_server.add_idle_handler([this](){ return m_rpc_payment->on_idle(); }, 60 * 1000);
+      m_net_server.add_idle_handler([this](){ return m_rpc_payment->on_idle(); }, std::chrono::minutes{1});
 
     bool store_ssl_key = !restricted && rpc_config->ssl_options && rpc_config->ssl_options.auth.certificate_path.empty();
     const auto ssl_base_path = (boost::filesystem::path{data_dir} / "rpc_ssl").string();
@@ -2081,6 +2081,20 @@ namespace cryptonote
       error_resp.message = "Wrong block blob";
       return false;
     }
+    if (req.major_version == HF_VERSION_CRYPTONIGHT_VARIANT_1 && req.major_version < RX_BLOCK_VERSION)
+    {
+      try
+      {
+        crypto::cn_variant1_check(blockblob.size(), /*variant=*/1);
+      }
+      catch(const std::exception& e)
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE;
+        error_resp.message = "Block blob size is too small for CryptoNight v1, rejecting block";
+        return false;
+      }
+    }
+    
     if(!m_core.check_incoming_block_size(blockblob))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE;
@@ -2101,8 +2115,18 @@ namespace cryptonote
       buf.copy(reinterpret_cast<char *>(&seed_hash), sizeof(crypto::hash));
     }
 
-    cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), blockblob, pow_hash, req.height,
-      req.major_version, req.seed_hash.size() ? &seed_hash : NULL, 0);
+    try
+    {
+      cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), blockblob, pow_hash, req.height,
+        req.major_version, req.seed_hash.size() ? &seed_hash : NULL, 0);
+    }
+    catch (const std::exception &e)
+    {
+      MERROR("Caught unexpected error while hashing in " << __PRETTY_FUNCTION__ << ": " << e.what());
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = e.what();
+      return false;
+    }
     res = string_tools::pod_to_hex(pow_hash);
     return true;
   }
@@ -2113,6 +2137,15 @@ namespace cryptonote
     bool r;
     if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_ADD_AUX_POW>(invoke_http_mode::JON_RPC, "add_aux_pow", req, res, r))
       return r;
+
+    const bool restricted = m_restricted && ctx;
+
+    if (restricted && req.aux_pow.size() > 10)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
+      error_resp.message = "Too many aux pow hashes";
+      return false;
+    }
 
     if (req.aux_pow.empty())
     {
@@ -2149,7 +2182,7 @@ namespace cryptonote
     while ((1u << path_domain) < aux_pow.size())
       ++path_domain;
     uint32_t nonce;
-    const uint32_t max_nonce = 65535;
+    const uint32_t max_nonce = restricted ? 16384 : 65535;
     bool collision = true;
     std::vector<uint32_t> slots(aux_pow.size());
     for (nonce = 0; nonce <= max_nonce; ++nonce)

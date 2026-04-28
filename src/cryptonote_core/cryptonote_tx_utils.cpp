@@ -28,9 +28,11 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <optional>
 #include <unordered_set>
 #include <random>
 #include "include_base_utils.h"
+#include "misc_log_ex.h"
 #include "string_tools.h"
 using namespace epee;
 
@@ -45,6 +47,40 @@ using namespace epee;
 #include "ringct/rctSigs.h"
 
 using namespace crypto;
+
+
+namespace
+{
+//---------------------------------------------------------------
+/**
+ * @brief check if can re-derive change address from device / keys
+ * @param change_addr address to attempt to re-derive
+ * @param subaddresses subaddress map
+ * @param keys account keys of sender
+ * @return subaddress index of `change_addr` if in the subaddress map and re-derives from device, otherwise nullopt
+ */
+std::optional<cryptonote::subaddress_index> sanity_check_change_address(
+  const cryptonote::account_public_address& change_addr,
+  const std::unordered_map<crypto::public_key, cryptonote::subaddress_index>& subaddresses,
+  const cryptonote::account_keys &keys
+)
+{
+  // guess/find subaddress index of `change_addr`, works for main addresses if `subaddresses` is empty
+  cryptonote::subaddress_index subaddr_index{}; // (0, 0) by default
+  const auto subaddr_it = subaddresses.find(change_addr.m_spend_public_key);
+  if (subaddr_it != subaddresses.cend())
+    subaddr_index = subaddr_it->second;
+
+  // if device does not return same address given index, then fail
+  hw::device &hwdev = keys.get_device();
+  const auto recomputed_addr = hwdev.get_subaddress(keys, subaddr_index);
+  if (change_addr != recomputed_addr)
+    return std::nullopt;
+
+  return {subaddr_index};
+}
+//---------------------------------------------------------------
+} //anonymous namespace
 
 namespace cryptonote
 {
@@ -212,6 +248,10 @@ namespace cryptonote
       LOG_ERROR("Empty sources");
       return false;
     }
+
+    std::optional<cryptonote::subaddress_index> recognized_change_index;
+    if (change_addr)
+      recognized_change_index = sanity_check_change_address(*change_addr, subaddresses, sender_account_keys);
 
     std::vector<rct::key> amount_keys;
     tx.set_null();
@@ -406,6 +446,11 @@ namespace cryptonote
     for(const tx_destination_entry& dst_entr: destinations)
     {
       CHECK_AND_ASSERT_MES(dst_entr.amount > 0 || tx.version > 1, false, "Destination with wrong amount: " << dst_entr.amount);
+      const bool matches_change_addr = change_addr && dst_entr.addr == *change_addr;
+      const bool is_bad_change_dst = matches_change_addr && dst_entr.amount > 0 && !recognized_change_index;
+      CHECK_AND_ASSERT_MES(!is_bad_change_dst, false,
+        "Non-zero amount change address is not recognized as belonging to the sender account");
+
       crypto::public_key out_eph_public_key;
       crypto::view_tag view_tag;
 
@@ -678,29 +723,13 @@ namespace cryptonote
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
   {
-    // block 202612 bug workaround
-    if (height == 202612)
+    crypto::hash seed_hash_ = crypto::null_hash;
+    if (pbc != NULL && major_version >= RX_BLOCK_VERSION)
     {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-      return true;
+      const uint64_t seed_height = rx_seedheight(height);
+      seed_hash_ = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
     }
-    if (major_version >= RX_BLOCK_VERSION)
-    {
-      crypto::hash hash;
-      if (pbc != NULL)
-      {
-        const uint64_t seed_height = rx_seedheight(height);
-        hash = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-      } else
-      {
-        memset(&hash, 0, sizeof(hash));  // only happens when generating genesis block
-      }
-      rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
-    } else {
-      const int pow_variant = major_version >= 7 ? major_version - 6 : 0;
-      crypto::cn_slow_hash(bd.data(), bd.size(), res, pow_variant, height);
-    }
+    res = get_block_longhash(bd, height, major_version, seed_hash_);
     return true;
   }
 

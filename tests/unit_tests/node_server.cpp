@@ -43,6 +43,21 @@
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
 #define MAKE_IPV4_SUBNET(a,b,c,d,e) epee::net_utils::ipv4_network_subnet{MAKE_IP(a,b,c,d),e}
 
+namespace
+{
+  boost::filesystem::path create_temp_dir()
+  {
+    boost::system::error_code ec;
+    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
+    if (ec)
+      return boost::filesystem::path{};
+    auto success = boost::filesystem::create_directory(path, ec);
+    if (!ec && success)
+      return path;
+    return boost::filesystem::path{};
+  }
+}
+
 namespace cryptonote {
   class blockchain_storage;
 }
@@ -78,7 +93,7 @@ public:
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
-  size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
+  size_t get_block_sync_size(uint64_t height, const uint64_t max_average_of_blocksize_in_queue = 0) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay) {}
   cryptonote::network_type get_nettype() const { return cryptonote::MAINNET; }
   bool get_pool_transaction(const crypto::hash& id, cryptonote::blobdata& tx_blob, cryptonote::relay_category tx_category) const { return false; }
@@ -131,6 +146,69 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
       return true;
 
   return false;
+}
+
+namespace
+{
+  using path_t = boost::filesystem::path;
+  using ec_t = boost::system::error_code;
+
+  path_t create_temp_dir(const char* pattern)
+  {
+    ec_t ec;
+    path_t path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path(pattern, ec);
+    if (ec)
+      return path_t{};
+
+    const bool success = boost::filesystem::create_directory(path, ec);
+    if (!ec && success)
+      return path;
+
+    return path_t{};
+  }
+
+  void remove_tree(const path_t& path)
+  {
+    ec_t ec;
+    boost::filesystem::remove_all(path, ec);
+  }
+
+  boost::program_options::variables_map make_regtest_options(const path_t& dir)
+  {
+    boost::program_options::options_description desc;
+    cryptonote::core::init_options(desc);
+    Server::init_options(desc);
+
+    std::vector<std::string> args{
+      "--regtest",
+      "--p2p-bind-ip=127.0.0.1",
+      "--no-igd",
+      "--out-peers=0",
+      "--in-peers=0",
+      "--data-dir",
+      dir.string(),
+      "--check-updates=disabled",
+      "--disable-dns-checkpoints",
+      "--offline",
+    };
+
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::command_line_parser(args).options(desc).run(),
+      vm
+    );
+    boost::program_options::notify(vm);
+    return vm;
+  }
+
+  nodetool::peerlist_entry make_peer(const epee::net_utils::network_address& address, const nodetool::peerid_type id, const int64_t last_seen)
+  {
+    nodetool::peerlist_entry peer = AUTO_VAL_INIT(peer);
+    peer.adr = address;
+    peer.id = id;
+    peer.last_seen = last_seen;
+    return peer;
+  }
 }
 
 TEST(ban, add)
@@ -301,17 +379,7 @@ TEST(ban, file_banlist)
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
-  auto create_node_dir = [](){
-    boost::system::error_code ec;
-    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return boost::filesystem::path{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (!ec && success)
-      return path;
-    return boost::filesystem::path{};
-  };
-  const auto node_dir = create_node_dir();
+  const auto node_dir = create_temp_dir();
   ASSERT_TRUE(!node_dir.empty());
   auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
       boost::filesystem::remove_all(node_dir);
@@ -616,7 +684,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     }
     virtual bool drop_connection(const contexts::basic& context) override {
       if (shared_state)
-        return shared_state->close(context.m_connection_id);
+        return shared_state->close(context.m_connection_id, true);
       else
         return {};
     }
@@ -690,7 +758,7 @@ TEST(cryptonote_protocol_handler, race_condition)
             net_node.core_protocol->process_payload_sync_data(msg.payload_data, context, true);
             handshaked.raise();
           },
-          P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT
+          std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT}
         );
         return true;
       }
@@ -698,16 +766,6 @@ TEST(cryptonote_protocol_handler, race_condition)
     handshaked.wait();
   };
   using path_t = boost::filesystem::path;
-  auto create_dir = []{
-    ec_t ec;
-    path_t path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return path_t{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (not ec && success)
-      return path;
-    return path_t{};
-  };
   auto remove_tree = [](const path_t &path){
     ec_t ec;
     boost::filesystem::remove_all(path, ec);
@@ -727,7 +785,7 @@ TEST(cryptonote_protocol_handler, race_condition)
   };
   using options_description_t = boost::program_options::options_description;
 
-  const auto dir = create_dir();
+  const auto dir = create_temp_dir();
   ASSERT_TRUE(not dir.empty());
 
   daemons_t daemon{
@@ -1202,7 +1260,7 @@ TEST(node_server, race_condition)
         EXPECT_TRUE(code >= 0);
         handshaked.raise();
       },
-      P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT
+      std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT}
     );
     handshaked.wait();
     boost::asio::post(conn->strand_, [conn]{
@@ -1216,21 +1274,11 @@ TEST(node_server, race_condition)
   };
   using path_t = boost::filesystem::path;
   using ec_t = boost::system::error_code;
-  auto create_dir = []{
-    ec_t ec;
-    path_t path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return path_t{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (not ec && success)
-      return path;
-    return path_t{};
-  };
   auto remove_tree = [](const path_t &path){
     ec_t ec;
     boost::filesystem::remove_all(path, ec);
   };
-  const auto dir = create_dir();
+  const auto dir = create_temp_dir();
   ASSERT_TRUE(not dir.empty());
   protocol_t protocol{};
   node_server_t node_server(protocol);
@@ -1268,6 +1316,48 @@ TEST(node_server, race_condition)
   worker.join();
   node_server.deinit();
   remove_tree(dir);
+}
+
+TEST(regtest, isolates_p2p_state_from_mainnet_data_dir)
+{
+  const path_t dir = create_temp_dir("regtest-%%%%%%%%%%%%%%%%");
+  ASSERT_TRUE(!dir.empty());
+  auto cleanup = epee::misc_utils::create_scope_leave_handler([&dir]{
+    remove_tree(dir);
+  });
+
+  nodetool::peerlist_types peers{};
+  peers.white.push_back(make_peer(MAKE_IPV4_ADDRESS_PORT(11, 22, 33, 44, 18080), 1, 100));
+  peers.gray.push_back(make_peer(MAKE_IPV4_ADDRESS_PORT(55, 66, 77, 88, 18080), 2, 200));
+
+  const path_t mainnet_state = dir / P2P_NET_DATA_FILENAME;
+  ASSERT_TRUE(nodetool::peerlist_storage{}.store(mainnet_state.string(), peers));
+
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  Server server(cprotocol);
+  cprotocol.set_p2p_endpoint(&server);
+
+  const auto vm = make_regtest_options(dir);
+  ASSERT_TRUE(server.init(vm));
+  ASSERT_EQ(0u, server.get_public_white_peers_count());
+  ASSERT_EQ(0u, server.get_public_gray_peers_count());
+  ASSERT_TRUE(server.deinit());
+
+  const path_t regtest_state = dir / "fake" / P2P_NET_DATA_FILENAME;
+  ASSERT_TRUE(boost::filesystem::exists(regtest_state));
+
+  auto base_storage = nodetool::peerlist_storage::open(mainnet_state.string());
+  ASSERT_TRUE(bool(base_storage));
+  nodetool::peerlist_types base_public = base_storage->take_zone(epee::net_utils::zone::public_);
+  EXPECT_EQ(1u, base_public.white.size());
+  EXPECT_EQ(1u, base_public.gray.size());
+
+  auto regtest_storage = nodetool::peerlist_storage::open(regtest_state.string());
+  ASSERT_TRUE(bool(regtest_storage));
+  nodetool::peerlist_types regtest_public = regtest_storage->take_zone(epee::net_utils::zone::public_);
+  EXPECT_TRUE(regtest_public.white.empty());
+  EXPECT_TRUE(regtest_public.gray.empty());
 }
 
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
