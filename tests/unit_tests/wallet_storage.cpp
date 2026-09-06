@@ -44,6 +44,25 @@ static constexpr const char WALLET_00fd416a_PRIMARY_ADDRESS[] =
 // https://github.com/monero-project/monero/blob/67d190ce7c33602b6a3b804f633ee1ddb7fbb4a1/src/wallet/wallet2.cpp#L156
 static constexpr const char WALLET2_ASCII_OUTPUT_MAGIC[] = "MoneroAsciiDataV1";
 
+class wallet_accessor_test
+{
+public:
+    static void forget_cached_key_image(tools::wallet2 &wallet, const size_t index)
+    {
+        crypto::key_image stale_key_image = AUTO_VAL_INIT(stale_key_image);
+        tools::wallet2::transfer_details &td = wallet.m_transfers.at(index);
+        td.m_key_image = stale_key_image;
+        td.m_key_image_known = false;
+        td.m_key_image_request = true;
+        td.m_key_image_partial = false;
+    }
+
+    static crypto::public_key get_public_key(const tools::wallet2 &wallet, const size_t index)
+    {
+        return wallet.m_transfers.at(index).get_public_key();
+    }
+};
+
 TEST(wallet_storage, store_to_file2file)
 {
     const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
@@ -134,6 +153,36 @@ TEST(wallet_storage, store_to_mem2file)
 
     EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
+}
+
+TEST(wallet_storage, export_key_images_uses_generated_key_image)
+{
+    const path wallet_file = unit_test::data_dir / "wallet_9svHk1";
+    epee::wipeable_string password("test");
+
+    tools::wallet2 w(cryptonote::TESTNET);
+    w.load(wallet_file.string(), password);
+    tools::wallet_keys_unlocker unlocker(w, &password);
+
+    const auto original = w.export_key_images(true);
+    ASSERT_EQ(0, original.first);
+    ASSERT_FALSE(original.second.empty());
+    const crypto::key_image expected_key_image = original.second.front().first;
+
+    wallet_accessor_test::forget_cached_key_image(w, 0);
+
+    const auto exported = w.export_key_images(false);
+    ASSERT_EQ(0, exported.first);
+    ASSERT_EQ(original.second.size(), exported.second.size());
+
+    const crypto::key_image &exported_key_image = exported.second.front().first;
+    EXPECT_TRUE(expected_key_image == exported_key_image);
+
+    const crypto::public_key pkey = wallet_accessor_test::get_public_key(w, 0);
+    std::vector<const crypto::public_key*> key_ptrs;
+    key_ptrs.push_back(&pkey);
+    EXPECT_TRUE(crypto::check_ring_signature((const crypto::hash&)exported_key_image,
+        exported_key_image, key_ptrs, &exported.second.front().second));
 }
 
 TEST(wallet_storage, change_password_same_file)
@@ -302,7 +351,7 @@ TEST(wallet_storage, gen_ascii_format)
         ASSERT_TRUE(epee::file_io_utils::load_file_to_string(target_wallet_file.string() + ".keys", key_file_contents));
         EXPECT_NE(std::string::npos, key_file_contents.find(WALLET2_ASCII_OUTPUT_MAGIC));
         for (const char c : key_file_contents)
-            ASSERT_TRUE(std::isprint(c) || c == '\n' || c == '\r');
+            ASSERT_TRUE(std::isprint(static_cast<unsigned char>(c)) || c == '\n' || c == '\r');
     }
 
     {
@@ -340,12 +389,16 @@ TEST(wallet_storage, change_export_format)
         // Assert that we initially store keys in binary format
         {
             std::string key_file_contents;
-            ASSERT_TRUE(epee::file_io_utils::load_file_to_string(target_wallet_file.string() + ".keys", key_file_contents));
+            ASSERT_TRUE(w.unlock_keys_file());
+            const bool loaded = epee::file_io_utils::load_file_to_string(target_wallet_file.string() + ".keys", key_file_contents);
+            ASSERT_TRUE(w.lock_keys_file());
+            ASSERT_TRUE(w.is_keys_file_locked());
+            ASSERT_TRUE(loaded);
             EXPECT_EQ(std::string::npos, key_file_contents.find(WALLET2_ASCII_OUTPUT_MAGIC));
             bool only_printable = true;
             for (const char c : key_file_contents)
             {
-                if (!std::isprint(c) && c != '\n' && c != '\r')
+                if (!std::isprint(static_cast<unsigned char>(c)) && c != '\n' && c != '\r')
                 {
                     only_printable = false;
                     break;
@@ -369,7 +422,7 @@ TEST(wallet_storage, change_export_format)
         ASSERT_TRUE(epee::file_io_utils::load_file_to_string(target_wallet_file.string() + ".keys", key_file_contents));
         EXPECT_NE(std::string::npos, key_file_contents.find(WALLET2_ASCII_OUTPUT_MAGIC));
         for (const char c : key_file_contents)
-            ASSERT_TRUE(std::isprint(c) || c == '\n' || c == '\r');
+            ASSERT_TRUE(std::isprint(static_cast<unsigned char>(c)) || c == '\n' || c == '\r');
     }
 
     {
@@ -594,4 +647,27 @@ TEST(wallet_keys_unlocker, first_not_locked)
         ASSERT_NE(w1_ks_encrypted_2, w1_ks_unencrypted);
         ASSERT_TRUE(verify_wallet_privkeys(w1));
     }
+}
+
+TEST(wallet_keys_unlocker, construction_failure_rolls_back_lock_count)
+{
+    const epee::wipeable_string password("correct horse battery staple");
+    const epee::wipeable_string wrong_password("correct horse battery stable");
+
+    tools::wallet2 w;
+    w.generate("", password);
+    ASSERT_TRUE(w.is_key_encryption_enabled());
+    ASSERT_FALSE(w.is_unattended());
+    ASSERT_FALSE(verify_wallet_privkeys(w));
+
+    ASSERT_ANY_THROW({
+        tools::wallet_keys_unlocker ul(w, &wrong_password);
+    });
+    ASSERT_FALSE(verify_wallet_privkeys(w));
+
+    {
+        tools::wallet_keys_unlocker ul(w, &password);
+        ASSERT_TRUE(verify_wallet_privkeys(w));
+    }
+    ASSERT_FALSE(verify_wallet_privkeys(w));
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2024, Monero Research Labs
+// Copyright (c) 2016-2026, Monero Research Labs
 //
 // Author: Shen Noether <shen.noether@gmx.com>
 //
@@ -722,12 +722,8 @@ namespace rct {
     void d2b(bits  amountb, xmr_amount val);
     //32 byte key to uint long long
     // if the key holds a value > 2^64
-    // then the value in the first 8 bytes is returned
-    xmr_amount h2d(const key &test);
-    //32 byte key to int[64]
-    void h2b(bits  amountb2, const key & test);
-    //int[64] to 32 byte key
-    void b2h(key  & amountdh, bits amountb2);
+    // then false is returned
+    bool h2d(xmr_amount &amountd, const key &test);
     //int[64] to uint long long
     xmr_amount b2d(bits amountb);
 
@@ -741,10 +737,12 @@ namespace rct {
     static inline const rct::key &sk2rct(const crypto::secret_key &sk) { return (const rct::key&)sk; }
     static inline const rct::key &ki2rct(const crypto::key_image &ki) { return (const rct::key&)ki; }
     static inline const rct::key &hash2rct(const crypto::hash &h) { return (const rct::key&)h; }
+    static inline const rct::key &pt2rct(const crypto::ec_point &pt) { return (const rct::key&)pt; }
     static inline const crypto::public_key &rct2pk(const rct::key &k) { return (const crypto::public_key&)k; }
     static inline const crypto::secret_key &rct2sk(const rct::key &k) { return (const crypto::secret_key&)k; }
     static inline const crypto::key_image &rct2ki(const rct::key &k) { return (const crypto::key_image&)k; }
     static inline const crypto::hash &rct2hash(const rct::key &k) { return (const crypto::hash&)k; }
+    static inline const crypto::ec_point &rct2pt(const rct::key &k) { return (const crypto::ec_point&)k; }
     static inline bool operator==(const rct::key &k0, const crypto::public_key &k1) { return !crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
     static inline bool operator!=(const rct::key &k0, const crypto::public_key &k1) { return crypto_verify_32(k0.bytes, (const unsigned char*)&k1); }
 }
@@ -766,7 +764,7 @@ inline std::ostream &operator <<(std::ostream &o, const rct::key &v) {
 
 namespace std
 {
-  template<> struct hash<rct::key> { std::size_t operator()(const rct::key &k) const { return reinterpret_cast<const std::size_t&>(k); } };
+  template<> struct hash<rct::key> { std::size_t operator()(const rct::key &k) const { return ::crypto::siphash_to_size_t(&k, sizeof(k)); } };
 }
 
 BLOB_SERIALIZER(rct::key);

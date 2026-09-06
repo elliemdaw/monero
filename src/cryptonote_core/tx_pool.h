@@ -61,9 +61,6 @@ namespace cryptonote
   /*                                                                      */
   /************************************************************************/
 
-  //! pair of <transaction fee, transaction hash> for organization
-  typedef std::pair<std::pair<double, std::time_t>, crypto::hash> tx_by_fee_and_receive_time_entry;
-
   class txFeeCompare
   {
   public:
@@ -78,18 +75,9 @@ namespace cryptonote
     }
   }; 
 
-  class hashCompare
-  {
-  public:
-    bool operator()(const crypto::hash& a, const crypto::hash& b) const
-    {
-      return memcmp(a.data, b.data, sizeof(crypto::hash)) < 0;
-    }
-  };
-
   //! container for sorting transactions by fee per unit size
   typedef boost::bimap<boost::bimaps::multiset_of<std::pair<double, std::time_t>, txFeeCompare>,
-                       boost::bimaps::set_of<crypto::hash, hashCompare>> sorted_tx_container;
+                       boost::bimaps::set_of<crypto::hash>> sorted_tx_container;
   
 
   /**
@@ -327,12 +315,9 @@ namespace cryptonote
      *
      * @param tx_infos return-by-reference the transactions' information
      * @param key_image_infos return-by-reference the spent key images' information
-     * @param include_sensitive_data return stempool, anonymity-pool, and unrelayed
-     *    txes and fields that are sensitive to the node privacy
-     *
      * @return true
      */
-    bool get_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos, bool include_sensitive_data = false) const;
+    bool get_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos) const;
 
     /**
      * @brief get information about all transactions and key images in the pool
@@ -341,7 +326,6 @@ namespace cryptonote
      *
      * @param tx_infos [out] the transactions' information
      * @param key_image_infos [out] the spent key images' information
-     *
      * @return true
      */
     bool get_pool_for_rpc(std::vector<cryptonote::rpc::tx_in_pool>& tx_infos, cryptonote::rpc::key_images_with_tx_hashes& key_image_infos) const;
@@ -432,20 +416,6 @@ namespace cryptonote
     uint64_t cookie() const { return m_cookie; }
 
     /**
-     * @brief get the cumulative txpool weight in bytes
-     *
-     * @return the cumulative txpool weight in bytes
-     */
-    size_t get_txpool_weight() const;
-
-    /**
-     * @brief set the max cumulative txpool weight in bytes
-     *
-     * @param bytes the max cumulative txpool weight in bytes
-     */
-    void set_txpool_max_weight(size_t bytes);
-
-    /**
      * @brief reduce the cumulative txpool weight by the weight provided
      *
      * @param weight the weight to reduce the total txpool weight by
@@ -457,9 +427,7 @@ namespace cryptonote
      */
     struct tx_details
     {
-      transaction tx;  //!< the transaction
       cryptonote::blobdata tx_blob; //!< the transaction's binary blob
-      size_t blob_size;  //!< the transaction's size
       size_t weight;  //!< the transaction's weight
       uint64_t fee;  //!< the transaction's fee amount
       crypto::hash max_used_block_id;  //!< the hash of the highest block referenced by an input
@@ -495,14 +463,14 @@ namespace cryptonote
     };
 
     /**
-     * @brief get infornation about a single transaction
+     * @brief get information about a single transaction
      */
-    bool get_transaction_info(const crypto::hash &txid, tx_details &td, bool include_sensitive_data, bool include_blob = false) const;
+    bool get_transaction_info(const crypto::hash &txid, tx_details &td, bool include_sensitive_data) const;
 
     /**
      * @brief get information about multiple transactions
      */
-    bool get_transactions_info(const std::vector<crypto::hash>& txids, std::vector<std::pair<crypto::hash, tx_details>>& txs, bool include_sensitive_data = false) const;
+    bool get_transactions_info(const epee::span<const crypto::hash> txids, std::vector<std::pair<crypto::hash, tx_details>>& txs, bool include_sensitive_data = false, size_t max_tx_count = 0) const;
 
     /**
      * @brief get transactions not in the passed set
@@ -627,7 +595,7 @@ namespace cryptonote
      */
     void prune(size_t bytes = 0);
 
-    void add_tx_to_transient_lists(const crypto::hash& txid, double fee, time_t receive_time);
+    void add_tx_to_transient_lists(const crypto::hash& txid, double fee, time_t receive_time, bool sensitive);
     void remove_tx_from_transient_lists(const cryptonote::sorted_tx_container::iterator& sorted_it, const crypto::hash& txid, bool sensitive);
     void track_removed_tx(const crypto::hash& txid, bool sensitive);
 
@@ -663,8 +631,14 @@ private:
 
     std::atomic<uint64_t> m_cookie; //!< incremented at each change
 
+    struct added_tx_info
+    {
+      time_t receive_time;
+      bool sensitive;
+    };
+
     // Info when transactions entered the pool, accessible by txid
-    std::unordered_map<crypto::hash, time_t> m_added_txs_by_id;
+    std::unordered_map<crypto::hash, added_tx_info> m_added_txs_by_id;
 
     // Info at what time the pool started to track the adding of transactions
     time_t m_added_txs_start_time;
@@ -680,7 +654,7 @@ private:
     std::multimap<time_t, removed_tx_info> m_removed_txs_by_time;
 
     // Info how far back in time the list of removed tx ids currently reaches
-    // (it gets shorted periodically to prevent overflow)
+    // (it gets shortened periodically to prevent overflow)
     time_t m_removed_txs_start_time;
 
     /**

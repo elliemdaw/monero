@@ -145,6 +145,9 @@ class ColdSigningTest():
             if do_check_key_images:
                 attributes_to_cmp.append("key_image")
             for i in range(len(hot_transfers_list)):
+                assert len(hot_transfers_list[i]['tx_hash']) == 64
+                assert hot_transfers_list[i]['tx_hash'] != '0' * 64
+                assert cold_transfers_list[i]['tx_hash'] == '', cold_transfers_list[i]['tx_hash']
                 for attr in attributes_to_cmp:
                     hot_val = hot_transfers_list[i][attr]
                     cold_val = cold_transfers_list[i][attr]
@@ -190,6 +193,7 @@ class ColdSigningTest():
         assert desc.change_amount == desc.amount_in - 1000000000000 - fee
         assert desc.change_address == STANDARD_ADDRESS
         assert desc.fee == fee
+        assert 'weight' not in desc
         assert len(desc.recipients) == 1
         rec = desc.recipients[0]
         assert rec.address == destination_addr

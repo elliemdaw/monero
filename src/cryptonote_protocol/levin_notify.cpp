@@ -33,6 +33,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <chrono>
 #include <deque>
 #include <stdexcept>
@@ -147,7 +148,9 @@ namespace levin
          of waiting in here. */
 
       p2p.foreach_connection([&outs, blockchain_height] (detail::p2p_context& context) {
-        if (!context.m_is_income && context.m_remote_blockchain_height >= blockchain_height)
+        // Give a +2 allowable window for candidate peers, since we may not have updated the peer's
+        // known sync height yet (e.g. if we haven't received or finished processing their new block(s) yet)
+        if (!context.m_is_income && (context.m_remote_blockchain_height + 2) >= blockchain_height)
           outs.emplace_back(context.m_connection_id);
         return true;
       });
@@ -186,7 +189,7 @@ namespace levin
         epee::byte_slice arg_buff;
         epee::serialization::store_t_to_binary(request, arg_buff);
 
-        // we probably lowballed the payload size a bit, so added a but too much. Fix this now.
+        // we probably lowballed the payload size a bit, so added a bit too much. Fix this now.
         size_t remove = arg_buff.size() % granularity;
         if (remove > request._.size())
           request._.clear();
@@ -324,7 +327,7 @@ namespace levin
         : zone_(source.zone_), message_(source.message_.clone()), destination_(source.destination_)
       {}
 
-      //! \pre Called within `zone_->channels[destionation_].strand`.
+      //! \pre Called within `zone_->channels[destination_].strand`.
       void operator()()
       {
         if (!zone_)
@@ -354,7 +357,7 @@ namespace levin
         detail::zone& this_zone = *zone;
         ++this_zone.flush_callbacks;
         this_zone.flush_txs.expires_at(flush_time);
-        this_zone.flush_txs.async_wait(this_zone.strand.wrap(fluff_flush{std::move(zone)}));
+        this_zone.flush_txs.async_wait(boost::asio::bind_executor(this_zone.strand, fluff_flush{std::move(zone)}));
       }
 
       void operator()(const boost::system::error_code error)
@@ -628,9 +631,7 @@ namespace levin
 
         noise_channel& channel = zone->channels.at(index);
         channel.next_noise.expires_at(start + noise_min_delay + random_duration(noise_delay_range));
-        channel.next_noise.async_wait(
-          channel.strand.wrap(send_noise{std::move(zone), index, core})
-        );
+        channel.next_noise.async_wait(boost::asio::bind_executor(channel.strand, send_noise{std::move(zone), index, core}));
       }
 
       //! \pre Called within `zone_->channels[channel_].strand`.

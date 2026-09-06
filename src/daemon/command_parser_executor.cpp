@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -931,9 +931,14 @@ bool t_command_parser_executor::sync_info(const std::vector<std::string>& args)
 
 bool t_command_parser_executor::pop_blocks(const std::vector<std::string>& args)
 {
-  if (args.size() != 1)
+  if (args.size() < 1)
   {
-    std::cout << "Invalid syntax: One parameter expected. For more details, use the help command." << std::endl;
+    std::cout << "Invalid syntax: At least one parameter expected. For more details, use the help command." << std::endl;
+    return true;
+  }
+  else if (args.size() > 2)
+  {
+    std::cout << "Invalid syntax: A maximum of two parameters expected. For more details, use the help command." << std::endl;
     return true;
   }
 
@@ -945,23 +950,28 @@ bool t_command_parser_executor::pop_blocks(const std::vector<std::string>& args)
       std::cout << "Invalid syntax: Number of blocks must be greater than 0. For more details, use the help command." << std::endl;
       return true;
     }
-    return m_executor.pop_blocks(nblocks);
+    bool keep_txs = false;
+    if (args.size() > 1)
+    {
+      const std::string keep_arg = args.at(1);
+      if (keep_arg == "keep-txs")
+        keep_txs = true;
+      else if (keep_arg == "no-keep-txs")
+        keep_txs = false;
+      else
+      {
+        std::cout << "Invalid syntax: Unrecognized argument: '" << keep_arg
+          << "'. For more details, use the help command." << std::endl;
+        return true;
+      }
+    }
+    return m_executor.pop_blocks(nblocks, keep_txs);
   }
   catch (const boost::bad_lexical_cast&)
   {
     std::cout << "Invalid syntax: Number of blocks must be a number greater than 0. For more details, use the help command." << std::endl;
   }
   return true;
-}
-
-bool t_command_parser_executor::rpc_payments(const std::vector<std::string>& args)
-{
-  if (args.size() != 0) {
-    std::cout << "Invalid syntax: No parameters expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.rpc_payments();
 }
 
 bool t_command_parser_executor::version(const std::vector<std::string>& args)
@@ -994,71 +1004,6 @@ bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>&
 bool t_command_parser_executor::check_blockchain_pruning(const std::vector<std::string>& args)
 {
   return m_executor.check_blockchain_pruning();
-}
-
-bool t_command_parser_executor::set_bootstrap_daemon(const std::vector<std::string>& args)
-{
-  struct parsed_t
-  {
-    std::string address;
-    std::string user;
-    std::string password;
-    std::string proxy;
-  };
-
-  boost::optional<parsed_t> parsed = [&args]() -> boost::optional<parsed_t> {
-    const size_t args_count = args.size();
-    if (args_count == 0)
-    {
-      return {};
-    }
-    if (args[0] == "auto")
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-    }
-    else if (args[0] == "none")
-    {
-      if (args_count == 1)
-      {
-        return {{"", "", "", ""}};
-      }
-    }
-    else
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-      if (args_count == 3)
-      {
-        return {{args[0], args[1], args[2], ""}};
-      }
-      if (args_count == 4)
-      {
-        return {{args[0], args[1], args[2], args[3]}};
-      }
-    }
-    return {};
-  }();
-
-  if (!parsed)
-  {
-    std::cout << "Invalid syntax: Wrong number of parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.set_bootstrap_daemon(parsed->address, parsed->user, parsed->password, parsed->proxy);
 }
 
 bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)

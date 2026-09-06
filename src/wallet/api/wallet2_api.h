@@ -88,7 +88,7 @@ struct PendingTransaction
     virtual uint64_t fee() const = 0;
     virtual std::vector<std::string> txid() const = 0;
     /*!
-     * \brief txCount - number of transactions current transaction will be splitted to
+     * \brief txCount - number of transactions current transaction will be split into
      * \return
      */
     virtual uint64_t txCount() const = 0;
@@ -140,10 +140,11 @@ struct UnsignedTransaction
     // returns a string with information about all transactions.
     virtual std::string confirmationMessage() const = 0;
     virtual std::vector<std::string> paymentId() const = 0;
+    // returns one address per destination, in the same order as amount().
     virtual std::vector<std::string> recipientAddress() const = 0;
     virtual uint64_t minMixinCount() const = 0;
     /*!
-     * \brief txCount - number of transactions current transaction will be splitted to
+     * \brief txCount - number of transactions current transaction will be split into
      * \return
      */
     virtual uint64_t txCount() const = 0;
@@ -368,7 +369,7 @@ struct WalletListener
     virtual void newBlock(uint64_t height) = 0;
 
     /**
-     * @brief updated  - generic callback, called when any event (sent/received/block reveived/etc) happened with the wallet;
+     * @brief updated  - generic callback, called when any event (sent/received/block received/etc) happened with the wallet;
      */
     virtual void updated() = 0;
 
@@ -546,6 +547,8 @@ struct Wallet
      * \return  - true on success
      */
     virtual bool init(const std::string &daemon_address, uint64_t upper_transaction_size_limit = 0, const std::string &daemon_username = "", const std::string &daemon_password = "", bool use_ssl = false, bool lightWallet = false, const std::string &proxy_address = "") = 0;
+    virtual void allowMismatchedDaemonVersion(bool allow_mismatch) = 0;
+    virtual void setRingDatabase(const std::string &path) = 0;
 
    /*!
     * \brief createWatchOnly - Creates a watch only wallet
@@ -586,8 +589,8 @@ struct Wallet
     /*!
      * \brief setSubaddressLookahead - set size of subaddress lookahead
      *
-     * \param major - size fot the major index
-     * \param minor - size fot the minor index
+     * \param major - size for the major index
+     * \param minor - size for the minor index
      */
     virtual void setSubaddressLookahead(uint32_t major, uint32_t minor) = 0;
 
@@ -726,7 +729,7 @@ struct Wallet
     virtual bool rescanBlockchain() = 0;
 
     /**
-     * @brief rescanBlockchainAsync - rescans wallet asynchronously, starting from genesys
+     * @brief rescanBlockchainAsync - rescans wallet asynchronously, starting from genesis
      */
     virtual void rescanBlockchainAsync() = 0;
 
@@ -811,7 +814,7 @@ struct Wallet
     virtual std::string getMultisigKeyExchangeBooster(const std::vector<std::string> &info, const uint32_t threshold, const uint32_t num_signers) = 0;
     /**
      * @brief exportMultisigImages - exports transfers' key images
-     * @param images - output paramter for hex encoded array of images
+     * @param images - output parameter for hex encoded array of images
      * @return true if success
      */
     virtual bool exportMultisigImages(std::string& images) = 0;
@@ -991,7 +994,7 @@ struct Wallet
      */
     virtual uint32_t defaultMixin() const = 0;
     /*!
-     * \brief setDefaultMixin - setum number of mixins to be used for new transactions
+     * \brief setDefaultMixin - sets the number of mixins to be used for new transactions
      * \param arg
      */
     virtual void setDefaultMixin(uint32_t arg) = 0;
@@ -1082,15 +1085,6 @@ struct Wallet
     */
     virtual void setOffline(bool offline) = 0;
     virtual bool isOffline() const = 0;
-    
-    //! blackballs a set of outputs
-    virtual bool blackballOutputs(const std::vector<std::string> &outputs, bool add) = 0;
-
-    //! blackballs an output
-    virtual bool blackballOutput(const std::string &amount, const std::string &offset) = 0;
-
-    //! unblackballs an output
-    virtual bool unblackballOutput(const std::string &amount, const std::string &offset) = 0;
 
     //! gets the ring used for a key image, if any
     virtual bool getRing(const std::string &key_image, std::vector<uint64_t> &ring) const = 0;

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "serialization/keyvalue_serialization.h"
+#include "storages/parserse_base_utils.h"
 #include "storages/portable_storage.h"
 #include "storages/portable_storage_template_helper.h"
 #include "span.h"
@@ -98,6 +99,74 @@ struct ObjWithOptChild
     KV_SERIALIZE_OPT(test_value, true);
   END_KV_SERIALIZE_MAP()
 };
+
+struct ObjWithBool
+{
+  bool b;
+
+  BEGIN_KV_SERIALIZE_MAP()
+    KV_SERIALIZE(b)
+  END_KV_SERIALIZE_MAP()
+};
+
+struct ObjWithString
+{
+  std::string s;
+
+  BEGIN_KV_SERIALIZE_MAP()
+    KV_SERIALIZE(s)
+  END_KV_SERIALIZE_MAP()
+};
+}
+
+TEST(epee_json, keyword_values)
+{
+  // true/false/null parse as keyword values
+  ObjWithBool o{};
+
+  o.b = false;
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o, std::string("{\"b\": true}")));
+  EXPECT_TRUE(o.b);
+
+  o.b = true;
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o, std::string("{\"b\": false}")));
+  EXPECT_FALSE(o.b);
+
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o, std::string("{\"b\": null}")));
+
+  // A value beginning with a non-ASCII byte (most significant bit == 1) is not
+  // a keyword and must be rejected.
+  EXPECT_FALSE(epee::serialization::load_t_from_json(o, std::string("{\"b\": \xc3\x28}")));
+}
+
+TEST(epee_json, escape_control_characters)
+{
+  using epee::misc_utils::parse::transform_to_escape_sequence;
+
+  // control characters must be escaped (RFC 8259): the short escapes are used
+  // where JSON defines them and \u00xx otherwise. \v is not a valid JSON escape.
+  EXPECT_EQ(transform_to_escape_sequence(std::string("\x01")), "\\u0001");
+  EXPECT_EQ(transform_to_escape_sequence(std::string("\x07")), "\\u0007");
+  EXPECT_EQ(transform_to_escape_sequence(std::string("\x0b")), "\\u000b");
+  EXPECT_EQ(transform_to_escape_sequence(std::string("\x1f")), "\\u001f");
+  EXPECT_EQ(transform_to_escape_sequence(std::string("a\x00" "b", 3)), "a\\u0000b");
+
+  // short escapes and printable text are unchanged
+  EXPECT_EQ(transform_to_escape_sequence(std::string("a\tb\n\r\f\b")), "a\\tb\\n\\r\\f\\b");
+  EXPECT_EQ(transform_to_escape_sequence(std::string("plain text")), "plain text");
+
+  // control characters round trip through the json serialiser and parser, and
+  // never appear verbatim in the serialised output
+  ObjWithString o{};
+  o.s = std::string("x\x01\x0b" "y", 4);
+  std::string j;
+  EXPECT_TRUE(epee::serialization::store_t_to_json(o, j));
+  EXPECT_EQ(j.find('\x01'), std::string::npos);
+  EXPECT_EQ(j.find('\x0b'), std::string::npos);
+
+  ObjWithString o2{};
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o2, j));
+  EXPECT_EQ(o2.s, o.s);
 }
 
 TEST(epee_binary, serialize_deserialize)
@@ -201,4 +270,45 @@ TEST(epee_binary, any_empty_seq)
 
   EXPECT_TRUE(epee::serialization::load_t_from_binary(i, epee::span<const std::uint8_t>(data_empty_object)));
   EXPECT_EQ(0, i.x.size());
+}
+
+namespace
+{
+struct ObjOfString
+{
+  std::string x;
+
+  BEGIN_KV_SERIALIZE_MAP()
+    KV_SERIALIZE(x)
+  END_KV_SERIALIZE_MAP()
+};
+}
+
+TEST(epee_json, unicode_escape_surrogate_pair)
+{
+  // 😀 is the UTF-16 surrogate pair for U+1F600, which must decode to
+  // the 4-byte UTF-8 sequence F0 9F 98 80 (not two 3-byte encoded surrogates).
+  ObjOfString o{};
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o, "{\"x\":\"\\uD83D\\uDE00\"}"));
+  EXPECT_EQ(std::string("\xF0\x9F\x98\x80"), o.x);
+
+  // Highest valid code point U+10FFFF.
+  ObjOfString o2{};
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o2, "{\"x\":\"\\uDBFF\\uDFFF\"}"));
+  EXPECT_EQ(std::string("\xF4\x8F\xBF\xBF"), o2.x);
+
+  // A basic multilingual plane escape is unaffected.
+  ObjOfString o3{};
+  EXPECT_TRUE(epee::serialization::load_t_from_json(o3, "{\"x\":\"\\u20AC\"}"));
+  EXPECT_EQ(std::string("\xE2\x82\xAC"), o3.x);
+}
+
+TEST(epee_json, unicode_escape_bad_surrogate)
+{
+  // A lone high surrogate, a lone low surrogate, and a high surrogate not
+  // followed by a low surrogate are all invalid and must fail to parse.
+  ObjOfString o{};
+  EXPECT_FALSE(epee::serialization::load_t_from_json(o, "{\"x\":\"\\uD83D\"}"));
+  EXPECT_FALSE(epee::serialization::load_t_from_json(o, "{\"x\":\"\\uDE00\"}"));
+  EXPECT_FALSE(epee::serialization::load_t_from_json(o, "{\"x\":\"\\uD83D\\u0041\"}"));
 }

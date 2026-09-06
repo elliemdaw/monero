@@ -27,20 +27,22 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "common/dns_utils.h"
+#include "common/threadpool.h"
+#include "crypto/crypto.h"
 // check local first (in the event of static or in-source compilation of libunbound)
-#include "misc_language.h"
+#include "misc_log_ex.h"
+#include "scope_guard.h"
 #include "unbound.h"
 
 #include <deque>
 #include <set>
 #include <stdlib.h>
-#include "include_base_utils.h"
-#include "common/threadpool.h"
-#include "crypto/crypto.h"
+#include <cstring>
 #include <boost/thread/mutex.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/optional.hpp>
 #include <boost/utility/string_ref.hpp>
+#include <boost/asio/ip/address.hpp>
 using namespace epee;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
@@ -48,11 +50,11 @@ using namespace epee;
 
 static const char *DEFAULT_DNS_PUBLIC_ADDR[] =
 {
+  "9.9.9.10",           // Quad9 unfiltered (Switzerland)
+  "149.112.112.10",     // Quad9 secondary (Switzerland)
+  "185.222.222.222",    // DNS.SB (Germany)
+  "45.11.45.11",        // DNS.SB secondary (Germany)
   "194.150.168.168",    // CCC (Germany)
-  "80.67.169.40",       // FDN (France)
-  "89.233.43.71",       // http://censurfridns.dk (Denmark)
-  "109.69.8.51",        // punCAT (Spain)
-  "193.58.251.251",     // SkyDNS (Russia)
 };
 
 static boost::mutex instance_lock;
@@ -133,55 +135,32 @@ static const char *get_record_name(int record_type)
   }
 }
 
-// fuck it, I'm tired of dealing with getnameinfo()/inet_ntop/etc
-boost::optional<std::string> ipv4_to_string(const char* src, size_t len)
+static boost::optional<std::string> ipv4_to_string(const char* src, size_t len)
 {
   if (len < 4)
   {
-    MERROR("Invalid IPv4 address: " << std::string(src, len));
+    MERROR("Invalid IPv4 address with length " << len);
     return boost::none;
   }
 
-  std::stringstream ss;
-  unsigned int bytes[4];
-  for (int i = 0; i < 4; i++)
-  {
-    unsigned char a = src[i];
-    bytes[i] = a;
-  }
-  ss << bytes[0] << "."
-     << bytes[1] << "."
-     << bytes[2] << "."
-     << bytes[3];
-  return ss.str();
+  boost::asio::ip::address_v4::bytes_type bytes;
+  std::memcpy(bytes.data(), src, 4);
+  boost::asio::ip::address_v4 addr(bytes);
+  return addr.to_string();
 }
 
-// this obviously will need to change, but is here to reflect the above
-// stop-gap measure and to make the tests pass at least...
-boost::optional<std::string> ipv6_to_string(const char* src, size_t len)
+static boost::optional<std::string> ipv6_to_string(const char* src, size_t len)
 {
-  if (len < 8)
+  if (len < 16)
   {
-    MERROR("Invalid IPv4 address: " << std::string(src, len));
+    MERROR("Invalid IPv6 address with length " << len);
     return boost::none;
   }
 
-  std::stringstream ss;
-  unsigned int bytes[8];
-  for (int i = 0; i < 8; i++)
-  {
-    unsigned char a = src[i];
-    bytes[i] = a;
-  }
-  ss << bytes[0] << ":"
-     << bytes[1] << ":"
-     << bytes[2] << ":"
-     << bytes[3] << ":"
-     << bytes[4] << ":"
-     << bytes[5] << ":"
-     << bytes[6] << ":"
-     << bytes[7];
-  return ss.str();
+  boost::asio::ip::address_v6::bytes_type bytes;
+  std::memcpy(bytes.data(), src, 16);
+  boost::asio::ip::address_v6 addr(bytes);
+  return addr.to_string();
 }
 
 boost::optional<std::string> txt_to_string(const char* src, size_t len)
@@ -203,24 +182,13 @@ struct DNSResolverData
   ub_ctx* m_ub_context;
 };
 
-// work around for bug https://www.nlnetlabs.nl/bugs-script/show_bug.cgi?id=515 needed for it to compile on e.g. Debian 7
-class string_copy {
-public:
-    string_copy(const char *s): str(strdup(s)) {}
-    ~string_copy() { free(str); }
-    operator char*() { return str; }
-
-public:
-    char *str;
-};
-
 static void add_anchors(ub_ctx *ctx)
 {
   const char * const *ds = ::get_builtin_ds();
   while (*ds)
   {
     MINFO("adding trust anchor: " << *ds);
-    ub_ctx_add_ta(ctx, string_copy(*ds++));
+    ub_ctx_add_ta(ctx, *ds++);
   }
 }
 
@@ -249,9 +217,9 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
   if (use_dns_public)
   {
     for (const auto &ip: dns_public_addr)
-      ub_ctx_set_fwd(m_data->m_ub_context, string_copy(ip.c_str()));
-    ub_ctx_set_option(m_data->m_ub_context, string_copy("do-udp:"), string_copy("no"));
-    ub_ctx_set_option(m_data->m_ub_context, string_copy("do-tcp:"), string_copy("yes"));
+      ub_ctx_set_fwd(m_data->m_ub_context, ip.c_str());
+    ub_ctx_set_option(m_data->m_ub_context, "do-udp:", "no");
+    ub_ctx_set_option(m_data->m_ub_context, "do-tcp:", "yes");
   }
   else {
     // look for "/etc/resolv.conf" and "/etc/hosts" or platform equivalent
@@ -276,9 +244,9 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
       m_data->m_ub_context = ub_ctx_create();
       add_anchors(m_data->m_ub_context);
       for (const auto &ip: DEFAULT_DNS_PUBLIC_ADDR)
-        ub_ctx_set_fwd(m_data->m_ub_context, string_copy(ip));
-      ub_ctx_set_option(m_data->m_ub_context, string_copy("do-udp:"), string_copy("no"));
-      ub_ctx_set_option(m_data->m_ub_context, string_copy("do-tcp:"), string_copy("yes"));
+        ub_ctx_set_fwd(m_data->m_ub_context, ip);
+      ub_ctx_set_option(m_data->m_ub_context, "do-udp:", "no");
+      ub_ctx_set_option(m_data->m_ub_context, "do-tcp:", "yes");
     }
   }
 }
@@ -303,15 +271,14 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
   
   ub_result *result;
   // Make sure we are cleaning after result.
-  epee::misc_utils::auto_scope_leave_caller scope_exit_handler =
-    epee::misc_utils::create_scope_leave_handler([&](){
+  const epee::scope_guard scope_exit_handler([&](){
     ub_resolve_free(result);
   });
   
   MDEBUG("Performing DNSSEC " << get_record_name(record_type) << " record query for " << url);
 
   // call DNS resolver, blocking.  if return value not zero, something went wrong
-  if (!ub_resolve(m_data->m_ub_context, string_copy(url.c_str()), record_type, DNS_CLASS_IN, &result))
+  if (!ub_resolve(m_data->m_ub_context, url.c_str(), record_type, DNS_CLASS_IN, &result))
   {
     dnssec_available = (result->secure || result->bogus);
     dnssec_valid = result->secure && !result->bogus;

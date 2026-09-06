@@ -1,8 +1,8 @@
 package=unbound
-$(package)_version=1.22.0
+$(package)_version=1.25.2
 $(package)_download_path=https://www.nlnetlabs.nl/downloads/$(package)/
 $(package)_file_name=$(package)-$($(package)_version).tar.gz
-$(package)_sha256_hash=c5dd1bdef5d5685b2cedb749158dd152c52d44f65529a34ac15cd88d4b1b3d43
+$(package)_sha256_hash=0d92275c703d5f5f8baba3dab22117dd8c29b495588a5c229768ed6581566600
 $(package)_dependencies=openssl
 $(package)_patches=no-expat.patch
 
@@ -19,7 +19,7 @@ endef
 # Remove blobs
 define $(package)_preprocess_cmds
   patch -p1 < $($(package)_patch_dir)/no-expat.patch &&\
-  rm configure~ doc/*.odp doc/*.pdf contrib/*.tar.gz contrib/*.tar.bz2 &&\
+  rm doc/*.odp doc/*.pdf contrib/*.tar.gz contrib/*.tar.bz2 &&\
   rm -rf testdata dnscrypt/testdata
 endef
 

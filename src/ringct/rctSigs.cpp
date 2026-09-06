@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2024, Monero Research Labs
+// Copyright (c) 2016-2026, Monero Research Labs
 //
 // Author: Shen Noether <shen.noether@gmx.com>
 // 
@@ -30,15 +30,17 @@
 
 #include "rctSigs.h"
 
+#include <atomic>
+
 #include "misc_log_ex.h"
-#include "misc_language.h"
 #include "common/perf_timer.h"
 #include "common/threadpool.h"
-#include "common/util.h"
 #include "bulletproofs.h"
 #include "bulletproofs_plus.h"
 #include "cryptonote_config.h"
 #include "device/device.hpp"
+#include "fcmp_pp/fcmp_pp_crypto.h"
+#include "scope_guard.h"
 #include "serialization/crypto.h"
 
 using namespace crypto;
@@ -177,7 +179,7 @@ namespace rct {
     //Borromean (c.f. gmax/andytoshi's paper)
     boroSig genBorromean(const key64 x, const key64 P1, const key64 P2, const bits indices) {
         key64 L[2], alpha;
-        auto wiper = epee::misc_utils::create_scope_leave_handler([&](){memwipe(alpha, sizeof(alpha));});
+        const epee::scope_guard wiper([&](){memwipe(alpha, sizeof(alpha));});
         key c;
         int naught = 0, prime = 0, ii = 0, jj=0;
         boroSig bb;
@@ -394,7 +396,7 @@ namespace rct {
         vector<geDsmp> Ip(dsRows);
         rv.II = keyV(dsRows);
         keyV alpha(rows);
-        auto wiper = epee::misc_utils::create_scope_leave_handler([&](){memwipe(alpha.data(), alpha.size() * sizeof(alpha[0]));});
+        const epee::scope_guard wiper([&](){memwipe(alpha.data(), alpha.size() * sizeof(alpha[0]));});
         keyV aG(rows);
         rv.ss = keyM(cols, aG);
         keyV aHP(dsRows);
@@ -686,7 +688,7 @@ namespace rct {
     //   the last row is the sum of input commitments from that column - sum output commitments
     //   this shows that sum inputs = sum outputs
     //Ver:    
-    //   verifies the above sig is created corretly
+    //   verifies the above sig is created correctly
     mgSig proveRctMG(const key &message, const ctkeyM & pubs, const ctkeyV & inSk, const ctkeyV &outSk, const ctkeyV & outPk, unsigned int index, const key &txnFeeKey, hw::device &hwdev) {
         //setup vars
         size_t cols = pubs.size();
@@ -764,15 +766,22 @@ namespace rct {
         return result;
     }
 
-    clsag proveRctCLSAGSimple(const key &message, const ctkeyV &pubs, const ctkey &inSk, const key &a, const key &Cout, unsigned int index, hw::device &hwdev) {
-        //setup vars
-        size_t rows = 1;
-        size_t cols = pubs.size();
-        CHECK_AND_ASSERT_THROW_MES(cols >= 1, "Empty pubs");
-        keyV tmp(rows + 1);
-        keyV sk(rows + 1);
-        keyM M(cols, tmp);
+    /**
+     * @brief Given a msg, mixring, pseudo out commitment, and private keys, make a CLSAG proof
+     * @param message any message we want to sign, but normally a transaction body hash
+     * @param pubs AKA mixring, a list of referenced output pubkey and amount commitment tuples { (K_o, C_a), ... }
+     * @param inSk (x, c_a) where x is the privkey of pubs[index].dest and c_a is the blinding factor of pubs[index].mask
+     * @param c_out the blinding factor for Cout
+     * @param Cout AKA the "pseudo amount commitment"
+     * @param index the index of our private keys in the mixring
+     * @return a CLSAG that proves someone with opening knowledge of K_o[k] and C_a[k] (k unknown) signed this message
+     */
+    clsag proveRctCLSAGSimple(const key &message, const ctkeyV &pubs, const ctkey &inSk, const key &c_out, const key &Cout, unsigned int index, hw::device &hwdev) {
+        CHECK_AND_ASSERT_THROW_MES(!pubs.empty(), "Empty pubs");
 
+        // P: unmodified output pubkeys                 K_o
+        // C: commitments to zero                       C_0 = C_a - Cout
+        // C_nonzero: unmodified amount commitments     C_a
         keyV P, C, C_nonzero;
         P.reserve(pubs.size());
         C.reserve(pubs.size());
@@ -786,10 +795,15 @@ namespace rct {
             C.push_back(tmp);
         }
 
-        sk[0] = copy(inSk.dest);
-        sc_sub(sk[1].bytes, inSk.mask.bytes, a.bytes);
-        clsag result = CLSAG_Gen(message, P, sk[0], C, sk[1], C_nonzero, Cout, index, hwdev);
-        memwipe(sk.data(), sk.size() * sizeof(key));
+        // zero_commit_sk: private key of "true" commitment to zero      c_0 s.t. C_0[index] = c_0 * G
+        // c_0 = c_a - c_out where:
+        //          c_a is the true amount commitment blinding factor and
+        //          c_out is the blinding factor of the pseudo amount commitment Cout
+        key zero_commit_sk;
+        sc_sub(zero_commit_sk.bytes, inSk.mask.bytes, c_out.bytes);
+
+        clsag result = CLSAG_Gen(message, P, inSk.dest, C, zero_commit_sk, C_nonzero, Cout, index, hwdev);
+        memwipe(&zero_commit_sk, sizeof(zero_commit_sk));
         return result;
     }
 
@@ -801,7 +815,7 @@ namespace rct {
     //   the last row is the sum of input commitments from that column - sum output commitments
     //   this shows that sum inputs = sum outputs
     //Ver:    
-    //   verifies the above sig is created corretly
+    //   verifies the above sig is created correctly
     bool verRctMG(const mgSig &mg, const ctkeyM & pubs, const ctkeyV & outPk, const key &txnFeeKey, const key &message) {
         PERF_TIMER(verRctMG);
         //setup vars
@@ -1040,12 +1054,12 @@ namespace rct {
     //   columns that are claimed as inputs, and that the sum of inputs  = sum of outputs.
     //   Also contains masked "amount" and "mask" so the receiver can see how much they received
     //verRct:
-    //   verifies that all signatures (rangeProogs, MG sig, sum inputs = outputs) are correct
+    //   verifies that all signatures (rangeProofs, MG sig, sum inputs = outputs) are correct
     //decodeRct: (c.f. https://eprint.iacr.org/2015/1098 section 5.1.1)
     //   uses the attached ecdh info to find the amounts represented by each output commitment 
     //   must know the destination private key to find the correct amount, else will return a random number
     //   Note: For txn fees, the last index in the amounts vector should contain that
-    //   Thus the amounts vector will be "one" longer than the destinations vectort
+    //   Thus the amounts vector will be "one" longer than the destinations vector
     rctSig genRct(const key &message, const ctkeyV & inSk, const keyV & destinations, const vector<xmr_amount> & amounts, const ctkeyM &mixRing, const keyV &amount_keys, unsigned int index, ctkeyV &outSk, const RCTConfig &rct_config, hw::device &hwdev) {
         CHECK_AND_ASSERT_THROW_MES(amounts.size() == destinations.size() || amounts.size() == destinations.size() + 1, "Different number of amounts/destinations");
         CHECK_AND_ASSERT_THROW_MES(amount_keys.size() == destinations.size(), "Different number of amount_keys/destinations");
@@ -1274,7 +1288,7 @@ namespace rct {
     //   columns that are claimed as inputs, and that the sum of inputs  = sum of outputs.
     //   Also contains masked "amount" and "mask" so the receiver can see how much they received
     //verRct:
-    //   verifies that all signatures (rangeProogs, MG sig, sum inputs = outputs) are correct
+    //   verifies that all signatures (rangeProofs, MG sig, sum inputs = outputs) are correct
     //decodeRct: (c.f. https://eprint.iacr.org/2015/1098 section 5.1.1)
     //   uses the attached ecdh info to find the amounts represented by each output commitment 
     //   must know the destination private key to find the correct amount, else will return a random number    
@@ -1541,18 +1555,9 @@ namespace rct {
       }
     }
 
-    //RingCT protocol
-    //genRct: 
-    //   creates an rctSig with all data necessary to verify the rangeProofs and that the signer owns one of the
-    //   columns that are claimed as inputs, and that the sum of inputs  = sum of outputs.
-    //   Also contains masked "amount" and "mask" so the receiver can see how much they received
-    //verRct:
-    //   verifies that all signatures (rangeProogs, MG sig, sum inputs = outputs) are correct
-    //decodeRct: (c.f. https://eprint.iacr.org/2015/1098 section 5.1.1)
-    //   uses the attached ecdh info to find the amounts represented by each output commitment 
-    //   must know the destination private key to find the correct amount, else will return a random number    
     xmr_amount decodeRct(const rctSig & rv, const key & sk, unsigned int i, key & mask, hw::device &hwdev) {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFull, false, "decodeRct called on non-full rctSig");
+        CHECK_AND_ASSERT_MES(rv.type != RCTTypeNull && rv.type <= RCTTypeBulletproofPlus,
+          false, "decodeRct called on unrecognized rctSig type");
         CHECK_AND_ASSERT_THROW_MES(i < rv.ecdhInfo.size(), "Bad index");
         CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.ecdhInfo.size(), "Mismatched sizes of rv.outPk and rv.ecdhInfo");
 
@@ -1573,7 +1578,10 @@ namespace rct {
         if (equalKeys(C, Ctmp) == false) {
             CHECK_AND_ASSERT_THROW_MES(false, "warning, amount decoded incorrectly, will be unable to spend");
         }
-        return h2d(amount);
+        rct::xmr_amount amount_8;
+        CHECK_AND_ASSERT_THROW_MES(h2d(amount_8, amount),
+          "long decoded amount contains superfluous data");
+        return amount_8;
     }
 
     xmr_amount decodeRct(const rctSig & rv, const key & sk, unsigned int i, hw::device &hwdev) {
@@ -1581,34 +1589,32 @@ namespace rct {
       return decodeRct(rv, sk, i, mask, hwdev);
     }
 
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key &mask, hw::device &hwdev) {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeSimple || rv.type == RCTTypeBulletproof || rv.type == RCTTypeBulletproof2 || rv.type == RCTTypeCLSAG || rv.type == RCTTypeBulletproofPlus,
-            false, "decodeRct called on non simple rctSig");
-        CHECK_AND_ASSERT_THROW_MES(i < rv.ecdhInfo.size(), "Bad index");
-        CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.ecdhInfo.size(), "Mismatched sizes of rv.outPk and rv.ecdhInfo");
+    bool verPointsForTorsion(const std::vector<key> & pts) {
+      if (pts.empty())
+        return true;
 
-        //mask amount and mask
-        ecdhTuple ecdh_info = rv.ecdhInfo[i];
-        hwdev.ecdhDecode(ecdh_info, sk, rv.type == RCTTypeBulletproof2 || rv.type == RCTTypeCLSAG || rv.type == RCTTypeBulletproofPlus);
-        mask = ecdh_info.mask;
-        key amount = ecdh_info.amount;
-        key C = rv.outPk[i].mask;
-        DP("C");
-        DP(C);
-        key Ctmp;
-        CHECK_AND_ASSERT_THROW_MES(sc_check(mask.bytes) == 0, "warning, bad ECDH mask");
-        CHECK_AND_ASSERT_THROW_MES(sc_check(amount.bytes) == 0, "warning, bad ECDH amount");
-        addKeys2(Ctmp, mask, amount, H);
-        DP("Ctmp");
-        DP(Ctmp);
-        if (equalKeys(C, Ctmp) == false) {
-            CHECK_AND_ASSERT_THROW_MES(false, "warning, amount decoded incorrectly, will be unable to spend");
-        }
-        return h2d(amount);
-    }
+      tools::threadpool& tpool = tools::threadpool::getInstanceForCompute();
+      tools::threadpool::waiter waiter(tpool);
 
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, hw::device &hwdev) {
-      key mask;
-      return decodeRctSimple(rv, sk, i, mask, hwdev);
+      std::atomic<bool> all_valid{true};
+      for (std::size_t i = 0; i < pts.size(); ++i)
+      {
+        tpool.submit(&waiter, [&pts, &all_valid, i]
+          {
+            const crypto::ec_point &point = rct::rct2pt(pts[i]);
+            crypto::ec_point torsion_cleared_point;
+            if (fcmp_pp::get_valid_torsion_cleared_point_vartime(point, torsion_cleared_point)
+                && point == torsion_cleared_point)
+            {
+              // Point is torsion free if it's equal to itself after clearing torsion
+              return;
+            }
+            all_valid.store(false);
+          });
+      }
+
+      CHECK_AND_ASSERT_MES(waiter.wait(), false, "threadpool waiter failed in torsion check");
+      CHECK_AND_ASSERT_MES(all_valid.load(), false, "Torsion check failed");
+      return true;
     }
 }

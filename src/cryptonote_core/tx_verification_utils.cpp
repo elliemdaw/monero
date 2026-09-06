@@ -207,7 +207,7 @@ static bool tx_ver_legacy_ring_sigs(transaction& tx, const rct::ctkeyM& mix_ring
         }
     };
 
-    // Multi-thread calls to check_ring_signature_job() for each input if available, else iterate on ths thread
+    // Multi-thread calls to check_ring_signature_job() for each input if available, else iterate on this thread
     tools::threadpool& tpool = tools::threadpool::getInstanceForCompute();
     const int threads = tpool.get_max_concurrency();
     const bool multi_threaded = threads > 1;
@@ -375,7 +375,7 @@ crypto::hash make_input_verification_id(const crypto::hash &tx_hash, const rct::
 {
     std::stringstream ss;
 
-    // Start with domain seperation
+    // Start with domain separation
     ss << config::HASH_KEY_TXHASH_AND_MIXRING;
 
     // Then add TX hash
@@ -406,7 +406,6 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
             // coinbase should not come here, so we reject for all other types
             MERROR("Unexpected Null rctSig type");
             return false;
-            break;
         case rct::RCTTypeSimple:
             if (!rct::verRctSemanticsSimple(rv))
             {
@@ -442,7 +441,6 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
         default:
             MERROR("Unknown rct type: " << rv.type);
             return false;
-            break;
         }
 
         // Save this ring sig for later, as we will attempt simple RCT semantics batch verification
@@ -469,7 +467,7 @@ bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc
     return ver_non_input_consensus_templated(&tx, &tx + 1, tvc, hf_version);
 }
 
-bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc,
+bool ver_non_input_consensus(pool_supplement& ps, tx_verification_context& tvc,
     const std::uint8_t hf_version)
 {
     // We already verified the pool supplement for this hard fork version! Yippee!

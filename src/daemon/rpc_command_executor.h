@@ -6,7 +6,7 @@
 
 */
 
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -154,7 +154,7 @@ public:
 
   bool sync_info();
 
-  bool pop_blocks(uint64_t num_blocks);
+  bool pop_blocks(uint64_t num_blocks, bool keep_txs);
 
   bool prune_blockchain();
 
@@ -163,14 +163,6 @@ public:
   bool print_net_stats();
 
   bool version();
-
-  bool set_bootstrap_daemon(
-    const std::string &address,
-    const std::string &username,
-    const std::string &password,
-    const std::string &proxy);
-
-  bool rpc_payments();
 
   bool flush_cache(bool invalid_blocks);
 };

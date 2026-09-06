@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2024, Monero Research Labs
+// Copyright (c) 2016-2026, Monero Research Labs
 //
 // Author: Shen Noether <shen.noether@gmx.com>
 // 
@@ -140,42 +140,18 @@ namespace rct {
     
     //32 byte key to uint long long
     // if the key holds a value > 2^64
-    // then the value in the first 8 bytes is returned    
-    xmr_amount h2d(const key & test) {
-        xmr_amount vali = 0;
+    // then false is returned
+    bool h2d(xmr_amount &amountd, const key & test) {
+        amountd = 0;
         int j = 0;
+        for (j = 8; j < 32; ++j) {
+            if (test.bytes[j])
+                return false;
+        }
         for (j = 7; j >= 0; j--) {
-            vali = (xmr_amount)(vali * 256 + (unsigned char)test.bytes[j]);
+            amountd = (xmr_amount)(amountd * 256 + (unsigned char)test.bytes[j]);
         }
-        return vali;
-    }
-    
-    //32 byte key to int[64]
-    void h2b(bits amountb2, const key & test) {
-        int val = 0, i = 0, j = 0;
-        for (j = 0; j < 8; j++) {
-            val = (unsigned char)test.bytes[j];
-            i = 0;
-            while (i < 8) {
-                amountb2[j*8+i++] = val & 1;
-                val >>= 1;
-            }
-        }
-    }
-    
-    //int[64] to 32 byte key
-    void b2h(key & amountdh, const bits amountb2) {
-        int byte, i, j;
-        for (j = 0; j < 8; j++) {
-            byte = 0;
-            for (i = 7; i > -1; i--) {
-                byte = byte * 2 + amountb2[8 * j + i];
-            }
-            amountdh[j] = (unsigned char)byte;
-        }
-        for (j = 8; j < 32; j++) {
-            amountdh[j] = (unsigned char)(0x00);
-        }
+        return true;
     }
     
     //int[64] to uint long long

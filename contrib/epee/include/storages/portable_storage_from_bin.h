@@ -28,7 +28,6 @@
 
 #pragma once 
 
-#include "misc_language.h"
 #include "misc_log_ex.h"
 #include "portable_storage_base.h"
 #include "portable_storage_bin_utils.h"
@@ -83,8 +82,6 @@ namespace epee
       void read(section& sec);
       void read(std::string& str);
       void read(array_entry &ae);
-      template<class t_type>
-      size_t min_bytes() const;
       void set_limits(size_t objects, size_t fields, size_t strings);
     private:
       struct recursuion_limitation_guard
@@ -229,7 +226,7 @@ namespace epee
       case SERIALIZE_TYPE_OBJECT: return read_ae<section>();
       case SERIALIZE_TYPE_ARRAY:  return read_ae<array_entry>();
       default: 
-        CHECK_AND_ASSERT_THROW_MES(false, "unknown entry_type code = " << type);
+        CHECK_AND_ASSERT_THROW_MES(false, "unknown entry_type code = " << static_cast<int>(type));
       }
       return read_ae<int8_t>(); // unreachable, dummy return to avoid compiler warning
     }
@@ -292,7 +289,7 @@ namespace epee
       RECURSION_LIMITATION();
       uint8_t ent_type = 0;
       read(ent_type);
-      CHECK_AND_ASSERT_THROW_MES(ent_type&SERIALIZE_FLAG_ARRAY, "wrong type sequenses");
+      CHECK_AND_ASSERT_THROW_MES(ent_type&SERIALIZE_FLAG_ARRAY, "wrong type sequences");
       return load_storage_array_entry(ent_type);
     }
 
@@ -321,7 +318,7 @@ namespace epee
       case SERIALIZE_TYPE_OBJECT: return read_se<section>();
       case SERIALIZE_TYPE_ARRAY:  return read_se<array_entry>();
       default: 
-        CHECK_AND_ASSERT_THROW_MES(false, "unknown entry_type code = " << ent_type);
+        CHECK_AND_ASSERT_THROW_MES(false, "unknown entry_type code = " << static_cast<int>(ent_type));
       }
       return read_se<int8_t>(); // unreachable, dummy return to avoid compiler warning
     }

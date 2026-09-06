@@ -9,7 +9,6 @@ namespace tools {
   extern __thread std::vector<LoggingPerformanceTimer*> *performance_timers;
 }
 
-void disable_bootstrap_daemon(cryptonote::core_rpc_server& rpc);
 std::map<int, std::function<void(cryptonote::core_rpc_server& rpc, FuzzedDataProvider&)>> get_fuzz_targets(bool safe);
 
 void fuzz_get_height(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
@@ -35,7 +34,6 @@ void fuzz_get_transaction_pool(cryptonote::core_rpc_server&, FuzzedDataProvider&
 void fuzz_get_transaction_pool_hashes_bin(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_transaction_pool_hashes(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_transaction_pool_stats(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_set_bootstrap_daemon(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_stop_daemon(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_info(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_net_stats(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
@@ -79,12 +77,6 @@ void fuzz_get_output_distribution(cryptonote::core_rpc_server&, FuzzedDataProvid
 void fuzz_prune_blockchain(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_flush_cache(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_txids_loose(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_info(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_submit_nonce(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_pay(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_tracking(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_data(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
-void fuzz_rpc_access_account(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 void fuzz_get_height(cryptonote::core_rpc_server&, FuzzedDataProvider& provider);
 
 extern std::map<int, std::function<void(cryptonote::core_rpc_server&, FuzzedDataProvider&)>> priority_fuzz_targets;

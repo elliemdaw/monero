@@ -30,6 +30,7 @@
 #define _NET_SSL_H
 
 #include <chrono>
+#include <functional>
 #include <stdint.h>
 #include <string>
 #include <vector>
@@ -39,6 +40,7 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/system/error_code.hpp>
+#include <openssl/evp.h>
 
 #define SSL_FINGERPRINT_SIZE 32
 
@@ -71,7 +73,7 @@ namespace net_utils
 
   /*!
     \note `verification != disabled && support == disabled` is currently
-      "allowed" via public interface but obviously invalid configuation.
+      "allowed" via public interface but obviously invalid configuration.
    */
   class ssl_options_t
   {
@@ -134,6 +136,8 @@ namespace net_utils
           situations where multiple hostnames are being handled by a server. If
           `verification == system_ca` the client also does a rfc2818 check to
           ensure that the server certificate is to the provided hostname.
+        \param abort_requested Polled while waiting; when it returns true the
+          handshake is cancelled and fails instead of running to `timeout`.
 
         \return True if the SSL handshake completes with peer verification
           settings. */
@@ -143,7 +147,8 @@ namespace net_utils
       boost::asio::ssl::stream_base::handshake_type type,
       boost::asio::const_buffer buffer = {},
       const std::string& host = {},
-      std::chrono::milliseconds timeout = std::chrono::seconds(15)) const;
+      std::chrono::milliseconds timeout = std::chrono::seconds(15),
+      const std::function<bool()>& abort_requested = nullptr) const;
   };
 
         // https://security.stackexchange.com/questions/34780/checking-client-hello-for-https-classification
@@ -151,7 +156,6 @@ namespace net_utils
 	bool is_ssl(const unsigned char *data, size_t len);
 	bool ssl_support_from_string(ssl_support_t &ssl, boost::string_ref s);
 
-	bool create_ec_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert);
 	bool create_rsa_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert);
 
   /**

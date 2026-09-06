@@ -30,9 +30,12 @@
 
 if (WIN32 OR STATIC)
   add_definitions(-DSTATICLIB)
-  # miniupnp changed their static define
-  add_definitions(-DMINIUPNP_STATICLIB)
 endif ()
+
+set(STACK_TRACE_USE_WRAP OFF)
+if (STACK_TRACE AND NOT STATIC AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set(STACK_TRACE_USE_WRAP ON)
+endif()
 
 function (monero_private_headers group)
   source_group("${group}\\Private"
@@ -85,6 +88,7 @@ monero_add_library(version SOURCES ${CMAKE_BINARY_DIR}/version.cpp DEPENDS genve
 
 add_subdirectory(common)
 add_subdirectory(crypto)
+add_subdirectory(fcmp_pp)
 add_subdirectory(ringct)
 add_subdirectory(checkpoints)
 add_subdirectory(cryptonote_basic)
@@ -96,7 +100,6 @@ add_subdirectory(hardforks)
 add_subdirectory(blockchain_db)
 add_subdirectory(mnemonics)
 add_subdirectory(rpc)
-add_subdirectory(seraphis_crypto)
 if(NOT IOS)
   add_subdirectory(serialization)
 endif()

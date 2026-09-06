@@ -106,8 +106,6 @@ namespace nodetool
     bool get_peerlist_head(std::vector<peerlist_entry>& bs_head, bool anonymize, uint32_t depth = P2P_DEFAULT_PEERS_IN_HANDSHAKE);
     void get_peerlist(std::vector<peerlist_entry>& pl_gray, std::vector<peerlist_entry>& pl_white);
     void get_peerlist(peerlist_types& peers);
-    bool get_white_peer_by_index(peerlist_entry& p, size_t i);
-    bool get_gray_peer_by_index(peerlist_entry& p, size_t i);
     template<typename F> bool foreach(bool white, const F &f);
     void evict_host_from_peerlist(bool white, const peerlist_entry& pr);
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
@@ -124,47 +122,12 @@ namespace nodetool
     
   private:
     struct by_time{};
-    struct by_id{};
     struct by_addr{};
-
-    struct modify_all_but_id
-    {
-      modify_all_but_id(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e.id = m_ple.id;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
-
-    struct modify_all
-    {
-      modify_all(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e = m_ple;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
-
-    struct modify_last_seen
-    {
-      modify_last_seen(time_t last_seen):m_last_seen(last_seen){}
-      void operator()(peerlist_entry& e)
-      {
-        e.last_seen = m_last_seen;
-      }
-    private:
-      time_t m_last_seen;
-    };
-
 
     typedef boost::multi_index_container<
       peerlist_entry,
       boost::multi_index::indexed_by<
-      // access by peerlist_entry::net_adress
+      // access by peerlist_entry::net_address
       boost::multi_index::ordered_unique<boost::multi_index::tag<by_addr>, boost::multi_index::member<peerlist_entry,epee::net_utils::network_address,&peerlist_entry::adr> >,
       // sort by peerlist_entry::last_seen<
       boost::multi_index::ordered_non_unique<boost::multi_index::tag<by_time>, boost::multi_index::member<peerlist_entry,int64_t,&peerlist_entry::last_seen> >
@@ -174,7 +137,7 @@ namespace nodetool
     typedef boost::multi_index_container<
       anchor_peerlist_entry,
       boost::multi_index::indexed_by<
-      // access by anchor_peerlist_entry::net_adress
+      // access by anchor_peerlist_entry::net_address
       boost::multi_index::ordered_unique<boost::multi_index::tag<by_addr>, boost::multi_index::member<anchor_peerlist_entry,epee::net_utils::network_address,&anchor_peerlist_entry::adr> >,
       // sort by anchor_peerlist_entry::first_seen
       boost::multi_index::ordered_non_unique<boost::multi_index::tag<by_time>, boost::multi_index::member<anchor_peerlist_entry,int64_t,&anchor_peerlist_entry::first_seen> >
@@ -240,28 +203,6 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::get_white_peer_by_index(peerlist_entry& p, size_t i)
-  {
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-    if(i >= m_peers_white.size())
-      return false;
-
-    p = peerlist_manager::get_nth_latest_peer(m_peers_white, i);
-    return true;
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
-    bool peerlist_manager::get_gray_peer_by_index(peerlist_entry& p, size_t i)
-  {
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-    if(i >= m_peers_gray.size())
-      return false;
-
-    p = peerlist_manager::get_nth_latest_peer(m_peers_gray, i);
-    return true;
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline 
   bool peerlist_manager::is_host_allowed(const epee::net_utils::network_address &address)
   {
     //never allow loopback ip

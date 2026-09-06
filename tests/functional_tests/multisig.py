@@ -153,7 +153,7 @@ class MultisigTest():
         addresses.append(res.address)
         next_stage.append(res.multisig_info)
 
-      # Assert multisig paramaters M/N for each wallet
+      # Assert multisig parameters M/N for each wallet
       for i in range(N_total):
         res = wallet[i].is_multisig()
         assert res.multisig == True
@@ -189,7 +189,7 @@ class MultisigTest():
         assert addresses[i] == expected_address, addresses[i]
       wallet_address = expected_address
 
-      # Assert multisig paramaters M/N and "ready" for each wallet
+      # Assert multisig parameters M/N and "ready" for each wallet
       for i in range(N_total):
         res = wallet[i].is_multisig()
         assert res.multisig == True
@@ -374,6 +374,7 @@ class MultisigTest():
         amount = res.amount
         assert res.fee > 0
         fee = res.fee
+        weight = res.weight
         assert len(res.tx_blob) == 0
         assert len(res.tx_metadata) == 0
         assert len(res.multisig_txset) > 0
@@ -397,6 +398,7 @@ class MultisigTest():
           assert desc.change_amount == desc.amount_in - 1000000000000 - fee
           assert desc.change_address == self.wallet_address
           assert desc.fee == fee
+          assert desc.weight == weight
           assert len(desc.recipients) == 1
           rec = desc.recipients[0]
           assert rec.address == '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm'
@@ -412,6 +414,10 @@ class MultisigTest():
             try: self.wallet[signers[-1]].submit_multisig(multisig_txset)
             except: ok = True
             assert ok
+
+        res = self.wallet[signers[-1]].describe_transfer(multisig_txset = multisig_txset)
+        assert len(res.desc) == 1
+        assert res.desc[0].weight == weight
 
         print('Submitting multisig transaction with wallet ' + str(signers[-1]))
         res = self.wallet[signers[-1]].submit_multisig(multisig_txset)
@@ -470,6 +476,7 @@ class MultisigTest():
         amount = res.amount
         assert res.fee > 0
         fee = res.fee
+        weight = res.weight
         assert len(res.tx_blob) == 0
         assert len(res.tx_metadata) == 0
         assert len(res.multisig_txset) > 0
@@ -496,7 +503,7 @@ class MultisigTest():
         assert frozen
 
         # Try signing multisig (this operation should fail b/c of the frozen key image)
-        print("Attemping to sign with frozen key image. This should fail")
+        print("Attempting to sign with frozen key image. This should fail")
         try:
           res = self.wallet[signers[1]].sign_multisig(multisig_txset)
           raise ValueError('sign_multisig should not have succeeded w/ frozen enotes')
@@ -522,6 +529,7 @@ class MultisigTest():
           assert desc.change_amount == desc.amount_in - 1000000000000 - fee
           assert desc.change_address == self.wallet_address
           assert desc.fee == fee
+          assert desc.weight == weight
           assert len(desc.recipients) == 1
           rec = desc.recipients[0]
           assert rec.address == '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm'

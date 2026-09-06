@@ -46,16 +46,12 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "misc_language.h"
 #include "ringct/rctTypes.h"
 #include "device/device.hpp"
 #include "cryptonote_basic/fwd.h"
 
 namespace cryptonote
 {
-  typedef std::vector<crypto::signature> ring_signature;
-
-
   /* outputs */
 
   struct txout_to_script
@@ -153,7 +149,6 @@ namespace cryptonote
 
   typedef boost::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
 
-  //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
   {
     uint64_t amount;

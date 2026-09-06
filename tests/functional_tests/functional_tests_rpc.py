@@ -13,7 +13,7 @@ USAGE = 'usage: functional_tests_rpc.py <python> <srcdir> <builddir> [<tests-to-
 DEFAULT_TESTS = [
   'address_book', 'bans', 'blockchain', 'cold_signing', 'daemon_info', 'get_output_distribution',
   'http_digest_auth', 'integrated_address', 'k_anonymity', 'mining', 'multisig', 'p2p', 'proofs',
-  'rpc_payment', 'sign_message', 'transfer', 'txpool', 'uri', 'validate_address', 'wallet'
+  'sign_message', 'transfer', 'txpool', 'uri', 'validate_address', 'wallet'
 ]
 try:
   python = sys.argv[1]
@@ -27,7 +27,7 @@ try:
   sys.argv[4]
 except:
   print(USAGE)
-  print('Available tests: ' + string.join(DEFAULT_TESTS, ', '))
+  print('Available tests: ' + ', '.join(DEFAULT_TESTS))
   print('Or run all with "all"')
   sys.exit(0)
 
@@ -39,7 +39,6 @@ except:
   tests = DEFAULT_TESTS
 
 # a main offline monerod, does most of the tests
-# a restricted RPC monerod setup with RPC payment
 # two local online monerods connected to each other
 N_MONERODS = 5
 
@@ -52,10 +51,11 @@ WALLET_DIRECTORY = builddir + "/functional-tests-directory"
 FUNCTIONAL_TESTS_DIRECTORY = builddir + "/tests/functional_tests"
 DIFFICULTY = 10
 
-monerod_base = [builddir + "/bin/monerod", "--regtest", "--fixed-difficulty", str(DIFFICULTY), "--no-igd", "--p2p-bind-port", "monerod_p2p_port", "--rpc-bind-port", "monerod_rpc_port", "--zmq-rpc-bind-port", "monerod_zmq_port", "--zmq-pub", "monerod_zmq_pub", "--non-interactive", "--disable-dns-checkpoints", "--check-updates", "disabled", "--rpc-ssl", "disabled", "--data-dir", "monerod_data_dir", "--log-level", "1", "--rpc-max-connections-per-private-ip", "100", "--rpc-max-connections", "100"]
+monerod_base = [builddir + "/bin/monerod", "--regtest", "--fixed-difficulty", str(DIFFICULTY), "--p2p-bind-port", "monerod_p2p_port", "--rpc-bind-port", "monerod_rpc_port", "--zmq-rpc-bind-port", "monerod_zmq_port", "--zmq-pub", "monerod_zmq_pub", "--non-interactive", "--disable-dns-checkpoints", "--check-updates", "disabled", "--rpc-ssl", "disabled", "--data-dir", "monerod_data_dir", "--log-level", "1", "--rpc-max-connections-per-private-ip", "100", "--rpc-max-connections", "100"]
+
 monerod_extra = [
   ["--offline"],
-  ["--rpc-payment-address", "44SKxxLQw929wRF6BA9paQ1EWFshNnKhXM3qz6Mo3JGDE2YG3xyzVutMStEicxbQGRfrYvAAYxH6Fe8rnD56EaNwUiqhcwR", "--rpc-payment-difficulty", str(DIFFICULTY), "--rpc-payment-credits", "5000", "--offline"],
+  ["--offline"],
   ["--add-exclusive-node", "127.0.0.1:18283"],
   ["--add-exclusive-node", "127.0.0.1:18282"],
   ["--rpc-login", "md5_lover:Z1ON0101", "--offline"],
@@ -126,21 +126,19 @@ deadline = time.monotonic() + startup_timeout
 for port in ports:
   addr = ('127.0.0.1', port)
   delay = 0
-  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-  try:
-    while True:
-      timeout = deadline - time.monotonic() - delay
-      if timeout <= 0:
-        print('Failed to start wallet or daemon')
-        kill()
-        sys.exit(1)
-      time.sleep(delay)
+  while True:
+    time.sleep(delay)
+    timeout = deadline - time.monotonic()
+    if timeout <= 0:
+      print('Failed to start wallet or daemon, last port checked: ' + str(port))
+      kill()
+      sys.exit(1)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
       s.settimeout(timeout)
-      if s.connect_ex(addr) == 0:
-        break
-      delay = .1
-  finally:
-    s.close()
+      err = s.connect_ex(addr)
+    if err == 0:
+      break
+    delay = .1
 
 # online daemons need some time to connect to peers to be ready
 time.sleep(2)
@@ -163,24 +161,14 @@ for test in tests:
 print('Stopping servers...')
 kill()
 
-# wait for exit, the poll method does not work (https://bugs.python.org/issue2475) so we wait, possibly forever if the process hangs
-if True:
-  for p in processes:
+# Wait up to 10 seconds for each process, then force termination.
+for p in processes:
+  try:
+    p.wait(timeout=10)
+  except subprocess.TimeoutExpired:
+    print('Failed to stop process ' + str(p.pid) + ', killing it')
+    p.kill()
     p.wait()
-else:
-  for i in range(10):
-    n_returncode = 0
-    for p in processes:
-      p.poll()
-      if p.returncode:
-        n_returncode += 1
-    if n_returncode == len(processes):
-      print('All done: ' + string.join([x.returncode for x in processes], ', '))
-      break
-    time.sleep(1)
-  for p in processes:
-    if not p.returncode:
-      print('Failed to stop process')
 
 if len(FAIL) == 0:
   print('Done, ' + str(len(PASS)) + '/' + str(len(tests)) + ' tests passed')

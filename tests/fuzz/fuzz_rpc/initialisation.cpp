@@ -16,6 +16,7 @@
 #include "serialization/binary_utils.h"
 #include "serialization/variant.h"
 
+#include <boost/filesystem.hpp>
 #include <boost/program_options/variables_map.hpp>
 #include <vector>
 #include <string>
@@ -51,21 +52,29 @@ std::unique_ptr<CoreEnv> initialise_rpc_core() {
   cryptonote::core::init_options(desc);
   boost::program_options::variables_map vm;
 
-  // Add command line argument to configure the rpc core object to use regression testing mode (FAKECHAIN)
-  // Enabling FAKECHAIN mode allows skipping validation logic of the authors signature and transactions ID
-  // on valid blocks and transactions while keeping other logic
-  std::vector<const char*> argv = {"fuzz", "--regtest"};
+  // Add command line arguments to configure the rpc core object to use regression testing mode (FAKECHAIN)
+  // and a throwaway data directory. Enabling FAKECHAIN mode allows skipping validation logic of the authors
+  // signature and transactions ID on valid blocks and transactions while keeping other logic.
+  const boost::filesystem::path data_dir = boost::filesystem::temp_directory_path() / "monero-fuzz-rpc";
+  std::vector<std::string> args = {"fuzz", "--regtest", "--offline", "--data-dir", data_dir.string()};
+  std::vector<const char*> argv;
+  argv.reserve(args.size());
+  for (const auto& arg : args) {
+    argv.push_back(arg.c_str());
+  }
   boost::program_options::store(boost::program_options::parse_command_line(argv.size(), argv.data(), desc), vm);
   boost::program_options::notify(vm);
 
   // Initialise the dummy core with all the above settings
-  env->core->init(vm);
+  if (!env->core->init(vm)) {
+    return nullptr;
+  }
 
   return env;
 }
 
 // Build the core_rpc_server handler object with the configured dummy core object
-std::unique_ptr<RpcServerBundle> initialise_rpc_server(cryptonote::core& dummy_core, FuzzedDataProvider& provider, bool need_payment) {
+std::unique_ptr<RpcServerBundle> initialise_rpc_server(cryptonote::core& dummy_core, bool restricted) {
   // Create rpc server bundle object
   auto bundle = std::make_unique<RpcServerBundle>();
 
@@ -73,46 +82,7 @@ std::unique_ptr<RpcServerBundle> initialise_rpc_server(cryptonote::core& dummy_c
   bundle->proto_handler = std::make_unique<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>(dummy_core, nullptr, true);
   bundle->proto_handler->set_no_sync(false);
   bundle->dummy_p2p = std::make_unique<nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>>(*bundle->proto_handler);
-  bundle->rpc = std::make_unique<cryptonote::core_rpc_server>(dummy_core, *bundle->dummy_p2p);
-
-  // Set up dummy variable map for rpc initialisation with payment
-  if (need_payment) {
-    boost::program_options::variables_map vm;
-    boost::program_options::options_description desc{"fuzz"};
-    command_line::add_arg(desc, cryptonote::arg_data_dir);
-    command_line::add_arg(desc, cryptonote::arg_testnet_on);
-    command_line::add_arg(desc, cryptonote::arg_stagenet_on);
-    cryptonote::core_rpc_server::init_options(desc);
-
-    // Generate random address and use it if it is a valid address with valid format
-    std::string address_arg;
-    if (provider.remaining_bytes() > 95) {
-      std::string random_str = provider.ConsumeBytesAsString(95);
-      if (!random_str.empty() && std::all_of(random_str.begin(), random_str.end(), [](char c) {
-            return isalnum(c);
-          })) {
-        address_arg = "--rpc-payment-address=" + random_str;
-      }
-    }
-
-    // Fall back to default hardcoded address if generated address is invalid
-    if (address_arg.empty()) {
-      address_arg = "--rpc-payment-address=44AFFq5kSiGBoZKfRLKFY7bUuS5JxqLkZ3Zf1diYv5ZdfTP7hS5gZtSGdgjNXmYGFzRiV3yTgF8Yf4zrhGcq14D3z8PUnHT";
-    }
-
-    // Provide needed payment related configuration for init of core_rpc_server
-    std::vector<const char*> argv = {
-      "fuzz",
-      address_arg.c_str()
-    };
-    boost::program_options::store(boost::program_options::parse_command_line(argv.size(), argv.data(), desc), vm);
-    boost::program_options::notify(vm);
-    bool success = bundle->rpc->init(vm, true, "18089", true, "");
-    if (!success) {
-      // Revert back to a fresh core_rpc_server if payment module init is failed
-      bundle->rpc = std::make_unique<cryptonote::core_rpc_server>(dummy_core, *bundle->dummy_p2p);
-    }
-  }
+  bundle->rpc = std::make_unique<cryptonote::core_rpc_server>(dummy_core, *bundle->dummy_p2p, restricted);
 
   return bundle;
 }

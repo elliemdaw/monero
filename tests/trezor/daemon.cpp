@@ -56,7 +56,6 @@ void mock_daemon::default_options(boost::program_options::variables_map & vm)
   tools::options::set_option(vm, nodetool::arg_p2p_add_exclusive_node, po::variable_value(exclusive_nodes, false));
 
   tools::options::set_option(vm, nodetool::arg_p2p_bind_ip, po::variable_value(std::string("127.0.0.1"), false));
-  tools::options::set_option(vm, nodetool::arg_no_igd, po::variable_value(true, false));
   tools::options::set_option(vm, cryptonote::arg_offline, po::variable_value(true, false));
   tools::options::set_option(vm, "disable-dns-checkpoints", po::variable_value(true, false));
 
@@ -234,7 +233,7 @@ bool mock_daemon::run_main()
     this->stop_p2p();
   });
 
-  epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){
+  const epee::scope_guard scope_exit_handler([&](){
     m_stopped = true;
     stop_thread.join();
   });
@@ -243,7 +242,7 @@ bool mock_daemon::run_main()
   {
     CHECK_AND_ASSERT_THROW_MES(m_rpc_server.run(2, false), "Failed to start RPC");
     cryptonote::rpc::DaemonHandler rpc_daemon_handler(*m_core, m_server);
-    cryptonote::rpc::ZmqServer zmq_server(rpc_daemon_handler);
+    cryptonote::rpc::ZmqServer zmq_server(rpc_daemon_handler, false);
 
     if (m_start_zmq)
     {

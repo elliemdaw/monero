@@ -80,49 +80,11 @@ else()
     message(STATUS "Trezor: support disabled by USE_DEVICE_TREZOR")
 endif()
 
-# Protobuf compilation test
-if(Protobuf_FOUND AND USE_DEVICE_TREZOR)
-    execute_process(COMMAND ${Protobuf_PROTOC_EXECUTABLE} -I "${CMAKE_CURRENT_LIST_DIR}" -I "${Protobuf_INCLUDE_DIR}" "${CMAKE_CURRENT_LIST_DIR}/test-protobuf.proto" --cpp_out ${CMAKE_BINARY_DIR} RESULT_VARIABLE RET OUTPUT_VARIABLE OUT ERROR_VARIABLE ERR)
-    if(RET)
-        trezor_fatal_msg("Trezor: Protobuf test generation failed: ${OUT} ${ERR}")
-    endif()
-
-    if(ANDROID)
-        set(CMAKE_TRY_COMPILE_LINKER_FLAGS "${CMAKE_TRY_COMPILE_LINKER_FLAGS} -llog")
-        set(CMAKE_TRY_COMPILE_LINK_LIBRARIES "${CMAKE_TRY_COMPILE_LINK_LIBRARIES} log")
-    endif()
-
-    if(USE_DEVICE_TREZOR_PROTOBUF_TEST)
-        if(PROTOBUF_LDFLAGS)
-            set(PROTOBUF_TRYCOMPILE_LINKER "${PROTOBUF_LDFLAGS}")
-        else()
-            set(PROTOBUF_TRYCOMPILE_LINKER "${Protobuf_LIBRARY}")
-        endif()
-        
-        try_compile(Protobuf_COMPILE_TEST_PASSED
-            "${CMAKE_BINARY_DIR}"
-            SOURCES
-            "${CMAKE_BINARY_DIR}/test-protobuf.pb.cc"
-            "${CMAKE_CURRENT_LIST_DIR}/test-protobuf.cpp"
-            CMAKE_FLAGS
-            CMAKE_EXE_LINKER_FLAGS ${CMAKE_TRY_COMPILE_LINKER_FLAGS}
-            "-DINCLUDE_DIRECTORIES=${Protobuf_INCLUDE_DIR};${CMAKE_BINARY_DIR}"
-            "-DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
-            LINK_LIBRARIES "${PROTOBUF_TRYCOMPILE_LINKER}" ${CMAKE_TRY_COMPILE_LINK_LIBRARIES}
-            OUTPUT_VARIABLE OUTPUT
-        )
-        if(NOT Protobuf_COMPILE_TEST_PASSED)
-            trezor_fatal_msg("Trezor: Protobuf Compilation test failed: ${OUTPUT}.")
-        endif()
-    else ()
-        message(STATUS "Trezor: Protobuf Compilation test skipped, build may fail later")
-    endif()
-endif()
-
 # Try to build protobuf messages
 if(Protobuf_FOUND AND USE_DEVICE_TREZOR)
     # .proto files to compile
     set(_proto_files "messages.proto"
+                     "options.proto"
                      "messages-common.proto"
                      "messages-management.proto"
                      "messages-monero.proto")
@@ -152,6 +114,27 @@ if(Protobuf_FOUND AND USE_DEVICE_TREZOR)
         file(WRITE "${_proto_out_dir}/messages-monero.pb.h" "${updated_content}")
     endif()
 
+    set(_deprecated_enum_files
+            "messages-common.pb.h"
+            "messages-management.pb.h"
+    )
+
+    foreach(file IN LISTS _deprecated_enum_files)
+        file(READ "${_proto_out_dir}/${file}" file_content)
+        string(REPLACE "PROTOBUF_DEPRECATED_ENUM" ""
+                updated_content "${file_content}")
+        string(PREPEND updated_content
+                "#if defined(__GNUC__)\n"
+                "#pragma GCC diagnostic push\n"
+                "#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"\n"
+                "#endif\n")
+        string(APPEND updated_content
+                "#if defined(__GNUC__)\n"
+                "#pragma GCC diagnostic pop\n"
+                "#endif\n")
+        file(WRITE "${_proto_out_dir}/${file}" "${updated_content}")
+    endforeach ()
+
     message(STATUS "Trezor: protobuf messages regenerated out.")
     set(DEVICE_TREZOR_READY 1)
     add_definitions(-DDEVICE_TREZOR_READY=1)
@@ -176,7 +159,7 @@ if(Protobuf_FOUND AND USE_DEVICE_TREZOR)
         find_package(LibUSB)
     endif()
 
-    if (LibUSB_COMPILE_TEST_PASSED)
+    if (LibUSB_FOUND)
         add_definitions(-DHAVE_TREZOR_LIBUSB=1)
         if(LibUSB_INCLUDE_DIRS)
             include_directories(${LibUSB_INCLUDE_DIRS})
@@ -184,7 +167,7 @@ if(Protobuf_FOUND AND USE_DEVICE_TREZOR)
     endif()
 
     set(TREZOR_LIBUSB_LIBRARIES "")
-    if(LibUSB_COMPILE_TEST_PASSED)
+    if(LibUSB_FOUND)
         list(APPEND TREZOR_LIBUSB_LIBRARIES ${LibUSB_LIBRARIES} ${LIBUSB_DEP_LINKER})
         message(STATUS "Trezor: compatible LibUSB found at: ${LibUSB_INCLUDE_DIRS}")
     elseif(USE_DEVICE_TREZOR_LIBUSB AND NOT ANDROID)

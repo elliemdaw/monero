@@ -163,7 +163,7 @@ namespace cryptonote
     if (m_points.empty())
       return 0;
 
-    auto it = m_points.upper_bound(block_height);
+    auto it = m_points.lower_bound(block_height);
     if (it == m_points.begin())
       return 0;
 
@@ -270,7 +270,8 @@ namespace cryptonote
     ADD_CHECKPOINT2(3516300, "fa08acbcda99fcc3cd94a749364a29fa6de9501a023cb6673d0c68fdf988b7c3", "0x738f0af4d65d459");
     ADD_CHECKPOINT2(3541000, "74c457bed9ceef40f31f43bb8fab804077519d45c910dcad2acf4dd8556195c7", "0x76ff158c682d218");
     ADD_CHECKPOINT2(3576000, "5da4891bfd06be270193bd949f2a623a2b0cb0ebfaad21c70a6cb18e418e5b6a", "0x7cb2e203e867b57");
-    ADD_CHECKPOINT2(3609000, "2c49c7eb40959b4d7a452dcec64e65c59a8b1ebec12ffe0af42bc9468eddae56", "0x823db8bb8f45661");
+    ADD_CHECKPOINT2(3661900, "ac392757a92123f68d63cd72f0d1410f63df1102a53b5d39fc4d53d0998b20a3", "0x8a38f2195826a97");
+    ADD_CHECKPOINT2(3707000, "9c508fe29120b5cd204f9d150e68fd2e4015d8d859bc0431f7016c7aabc711c9", "0x91129586d4979a6");
     return true;
   }
 

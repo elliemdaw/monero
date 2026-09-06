@@ -28,15 +28,11 @@
 //
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#include "include_base_utils.h"
-using namespace epee;
-
 #include "cryptonote_basic_impl.h"
 #include "string_tools.h"
 #include "serialization/binary_utils.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "misc_language.h"
 #include "common/base58.h"
 #include "crypto/hash.h"
 #include "int-util.h"
@@ -44,6 +40,8 @@ using namespace epee;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "cn"
+
+using namespace epee;
 
 namespace cryptonote {
 
@@ -127,26 +125,6 @@ namespace cryptonote {
     return true;
   }
   //------------------------------------------------------------------------------------
-  uint8_t get_account_address_checksum(const public_address_outer_blob& bl)
-  {
-    const unsigned char* pbuf = reinterpret_cast<const unsigned char*>(&bl);
-    uint8_t summ = 0;
-    for(size_t i = 0; i!= sizeof(public_address_outer_blob)-1; i++)
-      summ += pbuf[i];
-
-    return summ;
-  }
-  //------------------------------------------------------------------------------------
-  uint8_t get_account_integrated_address_checksum(const public_integrated_address_outer_blob& bl)
-  {
-    const unsigned char* pbuf = reinterpret_cast<const unsigned char*>(&bl);
-    uint8_t summ = 0;
-    for(size_t i = 0; i!= sizeof(public_integrated_address_outer_blob)-1; i++)
-      summ += pbuf[i];
-
-    return summ;
-  }
-  //-----------------------------------------------------------------------
   std::string get_account_address_as_str(
       network_type nettype
     , bool subaddress
@@ -193,96 +171,60 @@ namespace cryptonote {
     uint64_t integrated_address_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
     uint64_t subaddress_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX;
 
-    if (2 * sizeof(public_address_outer_blob) != str.size())
+    blobdata data;
+    uint64_t prefix;
+    if (!tools::base58::decode_addr(str, prefix, data))
     {
-      blobdata data;
-      uint64_t prefix;
-      if (!tools::base58::decode_addr(str, prefix, data))
+      LOG_PRINT_L2("Invalid address format");
+      return false;
+    }
+
+    if (integrated_address_prefix == prefix)
+    {
+      info.is_subaddress = false;
+      info.has_payment_id = true;
+    }
+    else if (address_prefix == prefix)
+    {
+      info.is_subaddress = false;
+      info.has_payment_id = false;
+    }
+    else if (subaddress_prefix == prefix)
+    {
+      info.is_subaddress = true;
+      info.has_payment_id = false;
+    }
+    else {
+      LOG_PRINT_L1("Wrong address prefix: " << prefix << ", expected " << address_prefix
+        << " or " << integrated_address_prefix
+        << " or " << subaddress_prefix);
+      return false;
+    }
+
+    if (info.has_payment_id)
+    {
+      integrated_address iadr;
+      if (!::serialization::parse_binary(data, iadr))
       {
-        LOG_PRINT_L2("Invalid address format");
+        LOG_PRINT_L1("Account public address keys can't be parsed");
         return false;
       }
-
-      if (integrated_address_prefix == prefix)
-      {
-        info.is_subaddress = false;
-        info.has_payment_id = true;
-      }
-      else if (address_prefix == prefix)
-      {
-        info.is_subaddress = false;
-        info.has_payment_id = false;
-      }
-      else if (subaddress_prefix == prefix)
-      {
-        info.is_subaddress = true;
-        info.has_payment_id = false;
-      }
-      else {
-        LOG_PRINT_L1("Wrong address prefix: " << prefix << ", expected " << address_prefix 
-          << " or " << integrated_address_prefix
-          << " or " << subaddress_prefix);
-        return false;
-      }
-
-      if (info.has_payment_id)
-      {
-        integrated_address iadr;
-        if (!::serialization::parse_binary(data, iadr))
-        {
-          LOG_PRINT_L1("Account public address keys can't be parsed");
-          return false;
-        }
-        info.address = iadr.adr;
-        info.payment_id = iadr.payment_id;
-      }
-      else
-      {
-        if (!::serialization::parse_binary(data, info.address))
-        {
-          LOG_PRINT_L1("Account public address keys can't be parsed");
-          return false;
-        }
-      }
-
-      if (!crypto::check_key(info.address.m_spend_public_key) || !crypto::check_key(info.address.m_view_public_key))
-      {
-        LOG_PRINT_L1("Failed to validate address keys");
-        return false;
-      }
+      info.address = iadr.adr;
+      info.payment_id = iadr.payment_id;
     }
     else
     {
-      // Old address format
-      std::string buff;
-      if(!string_tools::parse_hexstr_to_binbuff(str, buff))
-        return false;
-
-      if(buff.size()!=sizeof(public_address_outer_blob))
+      if (!::serialization::parse_binary(data, info.address))
       {
-        LOG_PRINT_L1("Wrong public address size: " << buff.size() << ", expected size: " << sizeof(public_address_outer_blob));
+        LOG_PRINT_L1("Account public address keys can't be parsed");
         return false;
       }
+    }
 
-      public_address_outer_blob blob = *reinterpret_cast<const public_address_outer_blob*>(buff.data());
-
-
-      if(blob.m_ver > CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER)
-      {
-        LOG_PRINT_L1("Unknown version of public address: " << blob.m_ver << ", expected " << CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER);
-        return false;
-      }
-
-      if(blob.check_sum != get_account_address_checksum(blob))
-      {
-        LOG_PRINT_L1("Wrong public address checksum");
-        return false;
-      }
-
-      //we success
-      info.address = blob.m_address;
-      info.is_subaddress = false;
-      info.has_payment_id = false;
+    if (!crypto::check_key(info.address.m_spend_public_key) || !crypto::check_key(info.address.m_view_public_key))
+    {
+      LOG_PRINT_L1("Failed to validate address keys");
+      return false;
     }
 
     return true;
@@ -295,8 +237,21 @@ namespace cryptonote {
     , std::function<std::string(const std::string&, const std::vector<std::string>&, bool)> dns_confirm
     )
   {
+    return get_account_address_from_str_or_url(info, nettype, str_or_url, true, dns_confirm);
+  }
+  //--------------------------------------------------------------------------------
+  bool get_account_address_from_str_or_url(
+      address_parse_info& info
+    , network_type nettype
+    , const std::string& str_or_url
+    , bool allow_dns
+    , std::function<std::string(const std::string&, const std::vector<std::string>&, bool)> dns_confirm
+    )
+  {
     if (get_account_address_from_str(info, nettype, str_or_url))
       return true;
+    if (!allow_dns)
+      return false;
     bool dnssec_valid;
     std::string address_str = tools::dns_utils::get_account_address_as_str_from_url(str_or_url, dnssec_valid, dns_confirm);
     return !address_str.empty() &&

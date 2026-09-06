@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 //
 // All rights reserved.
 //
@@ -132,18 +132,6 @@ namespace cryptonote
      * @return true on success, false if any initialization steps fail
      */
     bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0, const GetCheckpointsCallback& get_checkpoints = nullptr);
-
-    /**
-     * @brief Initialize the Blockchain state
-     *
-     * @param db a pointer to the backing store to use for the blockchain
-     * @param hf a structure containing hardfork information
-     * @param nettype network type
-     * @param offline true if running offline, else false
-     *
-     * @return true on success, false if any initialization steps fail
-     */
-    bool init(BlockchainDB* db, HardFork*& hf, const network_type nettype = MAINNET, bool offline = false);
 
     /**
      * @brief Uninitializes the blockchain state
@@ -514,12 +502,13 @@ namespace cryptonote
      * @param top_hash return-by-reference top block hash
      * @param start_height return-by-reference the height of the first block returned
      * @param pruned whether to return full or pruned tx blobs
+     * @param qblock_ids_exclusive when using qblock_ids, whether or not to include highest common block in response
      * @param max_block_count the max number of blocks to get
      * @param max_tx_count the max number of txes to get (it can get overshot by the last block's number of txes minus 1)
      *
      * @return true if a block found in common or req_start_block specified, else false
      */
-    bool find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, crypto::hash& top_hash, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_block_count, size_t max_tx_count) const;
+    bool find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::tuple<crypto::hash, crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, crypto::hash& top_hash, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, const bool qblock_ids_exclusive, size_t max_block_count, size_t max_tx_count) const;
 
     /**
      * @brief retrieves a set of blocks and their transactions, and possibly other transactions
@@ -583,7 +572,7 @@ namespace cryptonote
     /**
      * @brief gets per block distribution of outputs of a given amount
      *
-     * @param amount the amount to get a ditribution for
+     * @param amount the amount to get a distribution for
      * @param from_height the height before which we do not care about the data
      * @param to_height the height after which we do not care about the data
      * @param return-by-reference start_height the height of the first rct output
@@ -599,7 +588,7 @@ namespace cryptonote
      * to a specific transaction.
      *
      * @param tx_id the hash of the transaction to fetch indices for
-     * @param indexs return-by-reference the global indices for the transaction's outputs
+     * @param indices return-by-reference the global indices for the transaction's outputs
      * @param n_txes how many txes in a row to get results for
      *
      * @return false if the transaction does not exist, or if no indices are found, otherwise true
@@ -1130,8 +1119,9 @@ namespace cryptonote
      * @brief removes blocks from the top of the blockchain
      *
      * @param nblocks number of blocks to be removed
+     * @param keep_txs whether to place popped non-coinbase transactions back into the mempool
      */
-    void pop_blocks(uint64_t nblocks);
+    void pop_blocks(uint64_t nblocks, bool keep_txs);
 
     /**
      * @brief checks whether a given block height is included in the precompiled block hash area
@@ -1174,8 +1164,6 @@ namespace cryptonote
 
     // TODO: evaluate whether or not each of these typedefs are left over from blockchain_storage
     typedef std::unordered_set<crypto::key_image> key_images_container;
-
-    typedef std::vector<block_extended_info> blocks_container;
 
     typedef std::unordered_map<crypto::hash, block_extended_info> blocks_ext_by_hash;
 
@@ -1376,9 +1364,11 @@ namespace cryptonote
     /**
      * @brief removes the most recent block from the blockchain
      *
+     * @param keep_txs whether to place popped non-coinbase transactions back into the mempool
+     *
      * @return the block removed
      */
-    block pop_block_from_blockchain();
+    block pop_block_from_blockchain(bool keep_txs);
 
     /**
      * @brief validate and add a new block to the end of the blockchain
@@ -1462,7 +1452,7 @@ namespace cryptonote
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
+    static bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
 
     /**
      * @brief validates a miner (coinbase) transaction
@@ -1562,37 +1552,38 @@ namespace cryptonote
     bool add_block_as_invalid(const block_extended_info& bei, const crypto::hash& h);
 
     /**
-     * @brief checks a block's timestamp
+     * @brief checks a block's timestamp on top of the main chain
      *
      * This function grabs the timestamps from the most recent <n> blocks,
      * where n = BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.  If there are not those many
-     * blocks in the blockchain, the timestap is assumed to be valid.  If there
+     * blocks in the blockchain, the timestamp is assumed to be valid.  If there
      * are, this function returns:
      *   true if the block's timestamp is not less than the timestamp of the
      *       median of the selected blocks
      *   false otherwise
      *
      * @param b the block to be checked
-     * @param median_ts return-by-reference the median of timestamps
+     * @param[out] median_ts_out the median of timestamps (optional)
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp(const block& b, uint64_t& median_ts) const;
-    bool check_block_timestamp(const block& b) const { uint64_t median_ts; return check_block_timestamp(b, median_ts); }
+    bool check_block_timestamp_main_chain(const block& b, uint64_t* median_ts_out = nullptr) const;
 
     /**
      * @brief checks a block's timestamp
      *
      * If the block is not more recent than the median of the recent
-     * timestamps passed here, it is considered invalid.
+     * timestamps passed here, it is considered invalid. If the block is too
+     * recent, according to the local system clock, it is considered invalid.
      *
-     * @param timestamps a list of the most recent timestamps to check against
+     * @param[inout] timestamps a list of the most recent timestamps to check against
      * @param b the block to be checked
+     * @param[out] median_ts_out the median of `timestamps` (optional)
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
+    static bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b,
+      uint64_t* median_ts_out = nullptr);
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain

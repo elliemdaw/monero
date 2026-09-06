@@ -97,7 +97,6 @@ static void F8(hashState *state);  /*The compression function F8 */
 static HashReturn Init(hashState *state, int hashbitlen);
 static HashReturn Update(hashState *state, const BitSequence *data, DataLength databitlen);
 static HashReturn Final(hashState *state, BitSequence *hashval);
-HashReturn jh_hash(int hashbitlen, const BitSequence *data,DataLength databitlen, BitSequence *hashval);
 
 /*swapping bit 2i with bit 2i+1 of 64-bit x*/
 #define SWAP1(x)   (x) = ((((x) & 0x5555555555555555ULL) << 1) | (((x) & 0xaaaaaaaaaaaaaaaaULL) >> 1));
@@ -215,7 +214,7 @@ static void F8(hashState *state)
 {
       uint64_t* x = (uint64_t*)state->x;
 
-      /*xor the 512-bit message with the fist half of the 1024-bit hash state*/
+      /*xor the 512-bit message with the first half of the 1024-bit hash state*/
       for (int i = 0; i < 8; ++i) {
             uint64 b;
             memcpy(&b, &state->buffer[i << 3], sizeof(b));
@@ -242,7 +241,7 @@ static HashReturn Init(hashState *state, int hashbitlen)
       /*initialize the initial hash value of JH*/
       state->hashbitlen = hashbitlen;
 
-      /*load the intital hash value into state*/
+      /*load the initial hash value into state*/
       switch (hashbitlen)
       {
             case 224: memcpy(state->x,JH224_H0,128); break;

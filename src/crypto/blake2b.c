@@ -36,6 +36,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "memwipe.h"
 
+#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -65,21 +66,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define NATIVE_LITTLE_ENDIAN
 #endif
  /* Argon2 Team - End Code */
-
-static FORCE_INLINE uint32_t load32(const void *src) {
-#if defined(NATIVE_LITTLE_ENDIAN)
-	uint32_t w;
-	memcpy(&w, src, sizeof w);
-	return w;
-#else
-	const uint8_t *p = (const uint8_t *)src;
-	uint32_t w = *p++;
-	w |= (uint32_t)(*p++) << 8;
-	w |= (uint32_t)(*p++) << 16;
-	w |= (uint32_t)(*p++) << 24;
-	return w;
-#endif
-}
 
 static FORCE_INLINE uint64_t load64_native(const void *src) {
 	uint64_t w;
@@ -149,36 +135,6 @@ static FORCE_INLINE void store64(void *dst, uint64_t w) {
 /// END: endian.h
 
 /// BEGIN: blake2-impl.h
-
-static FORCE_INLINE uint64_t load48(const void *src) {
-	const uint8_t *p = (const uint8_t *)src;
-	uint64_t w = *p++;
-	w |= (uint64_t)(*p++) << 8;
-	w |= (uint64_t)(*p++) << 16;
-	w |= (uint64_t)(*p++) << 24;
-	w |= (uint64_t)(*p++) << 32;
-	w |= (uint64_t)(*p++) << 40;
-	return w;
-}
-
-static FORCE_INLINE void store48(void *dst, uint64_t w) {
-	uint8_t *p = (uint8_t *)dst;
-	*p++ = (uint8_t)w;
-	w >>= 8;
-	*p++ = (uint8_t)w;
-	w >>= 8;
-	*p++ = (uint8_t)w;
-	w >>= 8;
-	*p++ = (uint8_t)w;
-	w >>= 8;
-	*p++ = (uint8_t)w;
-	w >>= 8;
-	*p++ = (uint8_t)w;
-}
-
-static FORCE_INLINE uint32_t rotr32(const uint32_t w, const unsigned c) {
-	return (w >> c) | (w << (32 - c));
-}
 
 static FORCE_INLINE uint64_t rotr64(const uint64_t w, const unsigned c) {
 	return (w >> c) | (w << (64 - c));
@@ -325,9 +281,12 @@ int blake2b_init_key(blake2b_state *S, size_t outlen, const void *key, size_t ke
 		uint8_t block[BLAKE2B_BLOCKBYTES];
 		memset(block, 0, BLAKE2B_BLOCKBYTES);
 		memcpy(block, key, keylen);
-		blake2b_update(S, block, BLAKE2B_BLOCKBYTES);
+		int r = blake2b_update(S, block, BLAKE2B_BLOCKBYTES);
 		/* Burn the key from stack */
 		clear_internal_memory(block, BLAKE2B_BLOCKBYTES);
+		if (r < 0) {
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -559,5 +518,74 @@ fail:
 #undef TRY
 }
 /* Argon2 Team - End Code */
+
+int blake2b_monero(void *out, size_t outlen, const void *in, size_t inlen,
+	const void *key, size_t keylen) {
+	// At this time, we expect all Monero-based callers to use a keylen=32
+	// if a key is included. If a caller wants to use a key and keylen != 32,
+	// just remove this assert (and #include <assert.h>).
+	assert(keylen == 0 || keylen == 32);
+
+	static const uint8_t PERSONAL[BLAKE2B_PERSONALBYTES] = {'M', 'o', 'n', 'e', 'r', 'o'};
+
+	blake2b_param P;
+	blake2b_state S;
+	int ret = -1;
+
+	/* Verify parameters */
+	if (NULL == in && inlen > 0) {
+		goto fail;
+	}
+
+	if (NULL == out || outlen == 0 || outlen > BLAKE2B_OUTBYTES) {
+		goto fail;
+	}
+
+	if ((NULL == key && keylen > 0) || keylen > BLAKE2B_KEYBYTES) {
+		goto fail;
+	}
+
+	if (NULL != key && keylen == 0) {
+		goto fail;
+	}
+
+	/* Setup Parameter Block */
+	P.digest_length = (uint8_t)outlen;
+	P.key_length = (uint8_t)keylen;
+	P.fanout = 1;
+	P.depth = 1;
+	P.leaf_length = 0;
+	P.node_offset = 0;
+	P.node_depth = 0;
+	P.inner_length = 0;
+	memset(P.reserved, 0, sizeof(P.reserved));
+	memset(P.salt, 0, sizeof(P.salt));
+	memcpy(P.personal, PERSONAL, sizeof(PERSONAL));
+
+	if (blake2b_init_param(&S, &P) < 0) {
+		goto fail;
+	}
+
+	if (NULL != key) {
+		uint8_t block[BLAKE2B_BLOCKBYTES];
+		memset(block, 0, BLAKE2B_BLOCKBYTES);
+		memcpy(block, key, keylen);
+		int r = blake2b_update(&S, block, BLAKE2B_BLOCKBYTES);
+		/* Burn the key from stack */
+		clear_internal_memory(block, BLAKE2B_BLOCKBYTES);
+		if (r < 0) {
+			goto fail;
+		}
+	}
+
+	if (blake2b_update(&S, in, inlen) < 0) {
+		goto fail;
+	}
+	ret = blake2b_final(&S, out, outlen);
+
+fail:
+	clear_internal_memory(&S, sizeof(S));
+	return ret;
+}
 
 /// END: blake2b.c

@@ -1,25 +1,11 @@
 #include "rpc_endpoints.h"
 #include "initialisation.h"
-#include "rpc/rpc_payment_signature.h"
 #include <cstring>
 #include <map>
 
 // Initialising common objects for calling RPC endpoint functions
 cryptonote::core_rpc_server::connection_context ctx;
 epee::json_rpc::error error_resp;
-
-// Helper function to disable bootstrap daemon
-void disable_bootstrap_daemon(cryptonote::core_rpc_server& rpc) {
-  cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::request req;
-  cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::response res;
-
-  req.address = "";
-  req.username = "";
-  req.password = "";
-  req.proxy = "";
-
-  rpc.on_set_bootstrap_daemon(req, res, &ctx);
-}
 
 // Retrieve fuzz targets base on SAFE settings
 std::map<int, std::function<void(cryptonote::core_rpc_server& rpc, FuzzedDataProvider&)>> get_fuzz_targets(bool safe) {
@@ -312,21 +298,6 @@ void fuzz_get_transaction_pool_stats(cryptonote::core_rpc_server& rpc, FuzzedDat
   req.client = "fuzz";
 
   rpc.on_get_transaction_pool_stats(req, res, &ctx);
-}
-
-void fuzz_set_bootstrap_daemon(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::request req;
-  cryptonote::COMMAND_RPC_SET_BOOTSTRAP_DAEMON::response res;
-
-  req.address = provider.ConsumeRandomLengthString(64);
-  req.username = provider.ConsumeRandomLengthString(32);
-  req.password = provider.ConsumeRandomLengthString(32);
-  req.proxy = provider.ConsumeRandomLengthString(32);
-
-  rpc.on_set_bootstrap_daemon(req, res, &ctx);
-
-  // Immediate reset bootstrap daemon to avoid affecting other fuzzing with external calls
-  disable_bootstrap_daemon(rpc);
 }
 
 void fuzz_stop_daemon(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
@@ -799,62 +770,6 @@ void fuzz_get_txids_loose(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& 
   rpc.on_get_txids_loose(req, res, error_resp, &ctx);
 }
 
-void fuzz_rpc_access_info(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_INFO::request req;
-  cryptonote::COMMAND_RPC_ACCESS_INFO::response res;
-  req.client = "fuzz";
-
-  rpc.on_rpc_access_info(req, res, error_resp, &ctx);
-}
-
-void fuzz_rpc_access_submit_nonce(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_SUBMIT_NONCE::request req;
-  cryptonote::COMMAND_RPC_ACCESS_SUBMIT_NONCE::response res;
-  req.client = "fuzz";
-
-  req.nonce = provider.ConsumeIntegral<uint32_t>();
-  req.cookie = provider.ConsumeIntegral<uint32_t>();
-
-  rpc.on_rpc_access_submit_nonce(req, res, error_resp, &ctx);
-}
-
-void fuzz_rpc_access_pay(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_PAY::request req;
-  cryptonote::COMMAND_RPC_ACCESS_PAY::response res;
-  req.client = "fuzz";
-
-  req.paying_for = provider.ConsumeRandomLengthString(32);
-  req.payment = provider.ConsumeIntegral<uint64_t>();
-
-  rpc.on_rpc_access_pay(req, res, error_resp, &ctx);
-}
-
-void fuzz_rpc_access_tracking(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_TRACKING::request req;
-  cryptonote::COMMAND_RPC_ACCESS_TRACKING::response res;
-
-  req.clear = provider.ConsumeBool();
-
-  rpc.on_rpc_access_tracking(req, res, error_resp, &ctx);
-}
-
-void fuzz_rpc_access_data(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_DATA::request req;
-  cryptonote::COMMAND_RPC_ACCESS_DATA::response res;
-
-  rpc.on_rpc_access_data(req, res, error_resp, &ctx);
-}
-
-void fuzz_rpc_access_account(cryptonote::core_rpc_server& rpc, FuzzedDataProvider& provider) {
-  cryptonote::COMMAND_RPC_ACCESS_ACCOUNT::request req;
-  cryptonote::COMMAND_RPC_ACCESS_ACCOUNT::response res;
-  req.client = "fuzz";
-
-  req.delta_balance = provider.ConsumeIntegral<int64_t>();
-
-  rpc.on_rpc_access_account(req, res, error_resp, &ctx);
-}
-
 // Maps storing all fuzzing functions
 std::map<int, std::function<void(cryptonote::core_rpc_server&, FuzzedDataProvider&)>> priority_fuzz_targets = {
   {0, fuzz_get_blocks},
@@ -922,18 +837,11 @@ std::map<int, std::function<void(cryptonote::core_rpc_server&, FuzzedDataProvide
   {56, fuzz_stop_mining},
   {57, fuzz_mining_status},
   {58, fuzz_save_bc},
-  {59, fuzz_set_bootstrap_daemon},
   {60, fuzz_stop_daemon},
   {61, fuzz_update},
   {62, fuzz_add_aux_pow},
   {63, fuzz_flush_txpool},
   {64, fuzz_flush_cache},
   {65, fuzz_get_txids_loose},
-  {66, fuzz_rpc_access_info},
-  {67, fuzz_rpc_access_submit_nonce},
-  {68, fuzz_rpc_access_pay},
-  {69, fuzz_rpc_access_tracking},
-  {70, fuzz_rpc_access_data},
-  {71, fuzz_rpc_access_account},
 //  {72, fuzz_prune_blockchain},
 };

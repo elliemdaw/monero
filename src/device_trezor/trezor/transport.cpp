@@ -42,6 +42,12 @@
 #include "transport.hpp"
 #include "messages/messages-common.pb.h"
 
+// https://github.com/Tencent/rapidjson/issues/1448
+#ifdef _WIN32
+#undef GetObject
+#endif
+#include <rapidjson/document.h>
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "device.trezor.transport"
 
@@ -409,7 +415,7 @@ namespace trezor{
     }
 
     if (!m_device_path){
-      throw exc::CommunicationException("Coud not open, empty device path");
+      throw exc::CommunicationException("Could not open, empty device path");
     }
 
     std::string uri = "/acquire/" + m_device_path.get() + "/null";
@@ -475,14 +481,14 @@ namespace trezor{
     }
 
     boost::optional<epee::wipeable_string> bin_data = m_response->parse_hexstr();
-    if (!bin_data){
+    if (!bin_data || bin_data->size() < PROTO_HEADER_SIZE){
       throw exc::CommunicationException("Response is not well hexcoded");
     }
 
     uint16_t msg_tag;
     uint32_t msg_len;
     deserialize_message_header(bin_data->data(), msg_tag, msg_len);
-    if (bin_data->size() != msg_len + PROTO_HEADER_SIZE){
+    if (bin_data->size() - PROTO_HEADER_SIZE != msg_len){
       throw exc::CommunicationException("Response is not well hexcoded");
     }
 

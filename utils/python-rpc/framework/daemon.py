@@ -29,7 +29,17 @@
 
 """Daemon class to make rpc calls and store state."""
 
+from . import epee_binary
 from .rpc import JSONRPC 
+
+class DaemonBinary:
+    @staticmethod
+    def hash_list_to_blob(hash_list):
+        blob = bytes()
+        for h in hash_list:
+            assert len(h) == 64
+            blob += bytes.fromhex(h)
+        return blob
 
 class Daemon(object):
 
@@ -40,13 +50,13 @@ class Daemon(object):
         self.rpc = JSONRPC('{protocol}://{host}:{port}'.format(protocol=protocol, host=host, port=self.port),
             username, password)
 
-    def getblocktemplate(self, address, prev_block = "", client = ""):
+    def getblocktemplate(self, address, prev_block = "", client = "", reserve_size = 1):
         getblocktemplate = {
             'method': 'getblocktemplate',
             'params': {
                 'client': client,
                 'wallet_address': address,
-                'reserve_size' : 1,
+                'reserve_size' : reserve_size,
                 'prev_block' : prev_block,
             },
             'jsonrpc': '2.0', 
@@ -178,6 +188,24 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(getblockheadersrange)
     get_block_headers_range = getblockheadersrange
+
+    def get_blocks_fast(self, start_height, block_ids, requested_info = 0,
+            pool_info_since = 0, prune = True, no_miner_tx = False,
+            max_block_count = 0, block_ids_exclusive = False):
+        get_blocks_fast = {
+            'requested_info': requested_info,
+            'block_ids': DaemonBinary.hash_list_to_blob(block_ids),
+            'start_height': start_height,
+            'prune': prune,
+            'no_miner_tx': no_miner_tx,
+            'block_ids_exclusive': block_ids_exclusive,
+            'pool_info_since': pool_info_since,
+            'max_block_count': max_block_count
+        }
+        res = self.rpc.send_binary_request("/getblocks.bin", get_blocks_fast)
+        if 'top_block_hash' in res:
+            res['top_block_hash'] = res['top_block_hash'].hex()
+        return res
 
     def get_connections(self, client = ""):
         get_connections = {
@@ -328,14 +356,6 @@ class Daemon(object):
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(banned)
-
-    def set_bootstrap_daemon(self, address, username = '', password = ''):
-        set_bootstrap_daemon = {
-            'address': address,
-            'username': username,
-            'password': password,
-        }
-        return self.rpc.send_request('/set_bootstrap_daemon', set_bootstrap_daemon)
 
     def get_public_nodes(self, gray = False, white = True):
         get_public_nodes = {
@@ -612,73 +632,3 @@ class Daemon(object):
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(sync_txpool)
-
-    def rpc_access_info(self, client):
-        rpc_access_info = {
-            'method': 'rpc_access_info',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_info)
-
-    def rpc_access_submit_nonce(self, client, nonce, cookie):
-        rpc_access_submit_nonce = {
-            'method': 'rpc_access_submit_nonce',
-            'params': {
-                'client': client,
-                'nonce': nonce,
-                'cookie': cookie,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_submit_nonce)
-
-    def rpc_access_pay(self, client, paying_for, payment):
-        rpc_access_pay = {
-            'method': 'rpc_access_pay',
-            'params': {
-                'client': client,
-                'paying_for': paying_for,
-                'payment': payment,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_pay)
-
-    def rpc_access_tracking(self, clear = False):
-        rpc_access_tracking = {
-            'method': 'rpc_access_tracking',
-            'params': {
-                'clear': clear,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_tracking)
-
-    def rpc_access_data(self):
-        rpc_access_data = {
-            'method': 'rpc_access_data',
-            'params': {
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_data)
-
-    def rpc_access_account(self, client, delta_balance = 0):
-        rpc_access_account = {
-            'method': 'rpc_access_account',
-            'params': {
-                'client': client,
-                'delta_balance': delta_balance,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_account)

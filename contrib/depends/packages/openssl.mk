@@ -1,8 +1,8 @@
 package=openssl
-$(package)_version=3.5.4
+$(package)_version=3.5.8
 $(package)_download_path=https://github.com/openssl/openssl/releases/download/openssl-$($(package)_version)
 $(package)_file_name=$(package)-$($(package)_version).tar.gz
-$(package)_sha256_hash=967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99
+$(package)_sha256_hash=a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
 $(package)_patches=fix-android.patch
 
 define $(package)_set_vars

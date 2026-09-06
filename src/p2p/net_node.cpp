@@ -67,20 +67,6 @@ namespace
         return 0;
     }
 
-    template<typename T>
-    epee::net_utils::network_address get_address(const boost::string_ref value)
-    {
-        expect<T> address = T::make(value);
-        if (!address)
-        {
-            MERROR(
-                "Failed to parse " << epee::net_utils::zone_to_string(T::get_zone()) << " address \"" << value << "\": " << address.error().message()
-            );
-            return {};
-        }
-        return {std::move(*address)};
-    }
-
     bool start_socks(std::shared_ptr<net::socks::client> client, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote)
     {
         CHECK_AND_ASSERT_MES(client != nullptr, false, "Unexpected null client");
@@ -162,7 +148,7 @@ namespace nodetool
     const command_line::arg_descriptor<bool> arg_enable_dns_blocklist = {"enable-dns-blocklist", "Apply realtime blocklist from DNS", false};
 
     const command_line::arg_descriptor<bool>        arg_no_igd  = {"no-igd", "Disable UPnP port mapping"};
-    const command_line::arg_descriptor<std::string> arg_igd = {"igd", "UPnP port mapping (disabled, enabled, delayed)", "delayed"};
+    const command_line::arg_descriptor<std::string> arg_igd = {"igd", "UPnP port mapping (disabled)", "disabled"};
     const command_line::arg_descriptor<bool>        arg_p2p_use_ipv6  = {"p2p-use-ipv6", "Enable IPv6 for p2p", false};
     const command_line::arg_descriptor<bool>        arg_p2p_ignore_ipv4  = {"p2p-ignore-ipv4", "Ignore unsuccessful IPv4 bind for p2p", false};
     const command_line::arg_descriptor<int64_t>     arg_out_peers = {"out-peers", "set max number of out peers", P2P_DEFAULT_CONNECTIONS_COUNT};
@@ -176,7 +162,7 @@ namespace nodetool
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
     };
-    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address", 1};
+    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of inbound p2p connections allowed from the same IPv4 address or shared across a public IPv6 /64 subnet", 1};
 
     boost::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {
@@ -296,7 +282,6 @@ namespace nodetool
                 return boost::none;
             }
 
-            // get_address returns default constructed address on error
             if (inbounds.back().our_address == epee::net_utils::network_address{})
                 return boost::none;
 

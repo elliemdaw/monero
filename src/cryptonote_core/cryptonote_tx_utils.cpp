@@ -30,8 +30,6 @@
 
 #include <optional>
 #include <unordered_set>
-#include <random>
-#include "include_base_utils.h"
 #include "misc_log_ex.h"
 #include "string_tools.h"
 using namespace epee;
@@ -44,7 +42,11 @@ using namespace epee;
 #include "cryptonote_basic/tx_extra.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
+#include "crypto/wire.h"
+#include "misc_language.h"
 #include "ringct/rctSigs.h"
+#include "scope_guard.h"
+#include "serialization/wire.h"
 
 using namespace crypto;
 
@@ -216,6 +218,16 @@ namespace cryptonote
     //  << "), current_block_size=" << current_block_size << ", already_generated_coins=" << already_generated_coins << ", tx_id=" << get_transaction_hash(tx), LOG_LEVEL_2);
     return true;
   }
+  //---------------------------------------------------------------
+  namespace
+  {
+    template<typename F, typename T>
+    void map_backlog_entry(F& format, T& self)
+    {
+      wire::object(format, WIRE_FIELD(id), WIRE_FIELD(weight), WIRE_FIELD(fee));
+    }
+  }
+  WIRE_DEFINE_OBJECT(tx_block_template_backlog_entry, map_backlog_entry);
   //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const boost::optional<cryptonote::account_public_address>& change_addr)
   {
@@ -454,11 +466,12 @@ namespace cryptonote
       crypto::public_key out_eph_public_key;
       crypto::view_tag view_tag;
 
-      hwdev.generate_output_ephemeral_keys(tx.version,sender_account_keys, txkey_pub, tx_key,
+      const bool r = hwdev.generate_output_ephemeral_keys(tx.version,sender_account_keys, txkey_pub, tx_key,
                                            dst_entr, change_addr, output_index,
                                            need_additional_txkeys, additional_tx_keys,
                                            additional_tx_public_keys, amount_keys, out_eph_public_key,
                                            use_view_tags, view_tag);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to generate output ephemeral keys");
 
       tx_out out;
       cryptonote::set_tx_out(dst_entr.amount, out_eph_public_key, use_view_tags, view_tag, out);
@@ -655,7 +668,7 @@ namespace cryptonote
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
-    const auto auto_close_tx = epee::misc_utils::create_scope_leave_handler([&hwdev](){
+    const epee::scope_guard auto_close_tx([&hwdev](){
       hwdev.close_tx();
     });
     {
