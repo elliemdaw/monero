@@ -36,8 +36,6 @@ set(TEST_DATA_DIR "${CMAKE_CURRENT_BINARY_DIR}/data")
 
 if (WIN32 AND STATIC)
   add_definitions(-DSTATICLIB)
-  # miniupnp changed their static define
-  add_definitions(-DMINIUPNP_STATICLIB)
 endif ()
 
 set(BUILD_GMOCK OFF CACHE BOOL "Don't build GMock" FORCE)
@@ -102,7 +100,7 @@ if (${MONERO_WALLET_CRYPTO_BENCH} STREQUAL "auto")
   if (DEFINED AVAILABLE)
     list(APPEND MONERO_WALLET_CRYPTO_BENCH ${AVAILABLE})
   endif ()
-  message("Wallet crypto bench is using ${MONERO_WALLET_CRYPTO_BENCH}")
+  message(STATUS "Wallet crypto bench is using ${MONERO_WALLET_CRYPTO_BENCH}")
 endif ()
 
 list(REMOVE_DUPLICATES MONERO_WALLET_CRYPTO_BENCH)

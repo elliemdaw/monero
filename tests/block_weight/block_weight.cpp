@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2024, The Monero Project
+// Copyright (c) 2019-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -57,6 +57,7 @@ private:
 public:
   TestDB() { m_open = true; }
 
+  using cryptonote::BaseTestDB::add_block;
   virtual void add_block( const cryptonote::block& blk
                         , size_t block_weight
                         , uint64_t long_term_block_weight
@@ -96,7 +97,7 @@ public:
       *block_height = h - 1;
     return top;
   }
-  virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { blocks.pop_back(); }
+  virtual void pop_block(cryptonote::block &, std::vector<cryptonote::transaction> *) override { blocks.pop_back(); }
   virtual void set_hard_fork_version(uint64_t height, uint8_t version) override { if (height >= hf.size()) hf.resize(height + 1); hf[height] = version; }
   virtual uint8_t get_hard_fork_version(uint64_t height) const override { if (height >= hf.size()) return 255; return hf[height]; }
 

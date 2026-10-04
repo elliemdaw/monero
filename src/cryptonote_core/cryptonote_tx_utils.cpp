@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -30,8 +30,6 @@
 
 #include <optional>
 #include <unordered_set>
-#include <random>
-#include "include_base_utils.h"
 #include "misc_log_ex.h"
 #include "string_tools.h"
 using namespace epee;
@@ -43,47 +41,40 @@ using namespace epee;
 #include "cryptonote_basic/miner.h"
 #include "cryptonote_basic/tx_extra.h"
 #include "crypto/crypto.h"
-#include "crypto/hash.h"
+#include "crypto/hash-ops.h"
+#include "crypto/wire.h"
+#include "misc_language.h"
 #include "ringct/rctSigs.h"
+#include "scope_guard.h"
+#include "serialization/wire.h"
 
 using namespace crypto;
 
 
-namespace
-{
-//---------------------------------------------------------------
-/**
- * @brief check if can re-derive change address from device / keys
- * @param change_addr address to attempt to re-derive
- * @param subaddresses subaddress map
- * @param keys account keys of sender
- * @return subaddress index of `change_addr` if in the subaddress map and re-derives from device, otherwise nullopt
- */
-std::optional<cryptonote::subaddress_index> sanity_check_change_address(
-  const cryptonote::account_public_address& change_addr,
-  const std::unordered_map<crypto::public_key, cryptonote::subaddress_index>& subaddresses,
-  const cryptonote::account_keys &keys
-)
-{
-  // guess/find subaddress index of `change_addr`, works for main addresses if `subaddresses` is empty
-  cryptonote::subaddress_index subaddr_index{}; // (0, 0) by default
-  const auto subaddr_it = subaddresses.find(change_addr.m_spend_public_key);
-  if (subaddr_it != subaddresses.cend())
-    subaddr_index = subaddr_it->second;
-
-  // if device does not return same address given index, then fail
-  hw::device &hwdev = keys.get_device();
-  const auto recomputed_addr = hwdev.get_subaddress(keys, subaddr_index);
-  if (change_addr != recomputed_addr)
-    return std::nullopt;
-
-  return {subaddr_index};
-}
-//---------------------------------------------------------------
-} //anonymous namespace
 
 namespace cryptonote
 {
+  //---------------------------------------------------------------
+  std::optional<cryptonote::subaddress_index> sanity_check_change_address(
+    const cryptonote::account_public_address& change_addr,
+    const std::unordered_map<crypto::public_key, cryptonote::subaddress_index>& subaddresses,
+    const cryptonote::account_keys &keys
+  )
+  {
+    // guess/find subaddress index of `change_addr`, works for main addresses if `subaddresses` is empty
+    cryptonote::subaddress_index subaddr_index{}; // (0, 0) by default
+    const auto subaddr_it = subaddresses.find(change_addr.m_spend_public_key);
+    if (subaddr_it != subaddresses.cend())
+      subaddr_index = subaddr_it->second;
+
+    // if device does not return same address given index, then fail
+    hw::device &hwdev = keys.get_device();
+    const auto recomputed_addr = hwdev.get_subaddress(keys, subaddr_index);
+    if (change_addr != recomputed_addr)
+      return std::nullopt;
+
+    return {subaddr_index};
+  }
   //---------------------------------------------------------------
   void classify_addresses(const std::vector<tx_destination_entry> &destinations, const boost::optional<cryptonote::account_public_address>& change_addr, size_t &num_stdaddresses, size_t &num_subaddresses, account_public_address &single_dest_subaddress)
   {
@@ -217,6 +208,16 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
+  namespace
+  {
+    template<typename F, typename T>
+    void map_backlog_entry(F& format, T& self)
+    {
+      wire::object(format, WIRE_FIELD(id), WIRE_FIELD(weight), WIRE_FIELD(fee));
+    }
+  }
+  WIRE_DEFINE_OBJECT(tx_block_template_backlog_entry, map_backlog_entry);
+  //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const boost::optional<cryptonote::account_public_address>& change_addr)
   {
     account_public_address addr = {null_pkey, null_pkey};
@@ -248,6 +249,9 @@ namespace cryptonote
       LOG_ERROR("Empty sources");
       return false;
     }
+
+    for (const tx_destination_entry& destination : destinations)
+      CHECK_AND_ASSERT_MES(check_address(destination.addr), false, "Invalid destination address keys");
 
     std::optional<cryptonote::subaddress_index> recognized_change_index;
     if (change_addr)
@@ -454,11 +458,12 @@ namespace cryptonote
       crypto::public_key out_eph_public_key;
       crypto::view_tag view_tag;
 
-      hwdev.generate_output_ephemeral_keys(tx.version,sender_account_keys, txkey_pub, tx_key,
+      const bool r = hwdev.generate_output_ephemeral_keys(tx.version,sender_account_keys, txkey_pub, tx_key,
                                            dst_entr, change_addr, output_index,
                                            need_additional_txkeys, additional_tx_keys,
                                            additional_tx_public_keys, amount_keys, out_eph_public_key,
                                            use_view_tags, view_tag);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to generate output ephemeral keys");
 
       tx_out out;
       cryptonote::set_tx_out(dst_entr.amount, out_eph_public_key, use_view_tags, view_tag, out);
@@ -526,7 +531,7 @@ namespace cryptonote
         std::vector<crypto::signature>& sigs = tx.signatures.back();
         sigs.resize(src_entr.outputs.size());
         if (!zero_secret_key)
-          crypto::generate_ring_signature(tx_prefix_hash, boost::get<txin_to_key>(tx.vin[i]).k_image, keys_ptrs, in_contexts[i].in_ephemeral.sec, src_entr.real_output, sigs.data());
+          crypto::generate_ring_signature(tx_prefix_hash, boost::get<txin_to_key>(tx.vin[i]).k_image, keys_ptrs.data(), keys_ptrs.size(), in_contexts[i].in_ephemeral.sec, src_entr.real_output, sigs.data());
         ss_ring_s << "signatures:" << ENDL;
         std::for_each(sigs.begin(), sigs.end(), [&](const crypto::signature& s){ss_ring_s << s << ENDL;});
         ss_ring_s << "prefix_hash:" << tx_prefix_hash << ENDL << "in_ephemeral_key: " << crypto::secret_key_explicit_print_ref{in_contexts[i].in_ephemeral.sec} << ENDL << "real_output: " << src_entr.real_output << ENDL;
@@ -655,7 +660,7 @@ namespace cryptonote
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
-    const auto auto_close_tx = epee::misc_utils::create_scope_leave_handler([&hwdev](){
+    const epee::scope_guard auto_close_tx([&hwdev](){
       hwdev.close_tx();
     });
     {

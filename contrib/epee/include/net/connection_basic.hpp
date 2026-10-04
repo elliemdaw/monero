@@ -36,7 +36,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/* rfree: place for hanlers for the non-template base, can be used by connection<> template class in abstract_tcp_server2 file  */
+/* rfree: place for handlers for the non-template base, can be used by connection<> template class in abstract_tcp_server2 file  */
 
 #ifndef INCLUDED_p2p_connection_basic_hpp
 #define INCLUDED_p2p_connection_basic_hpp
@@ -46,7 +46,11 @@
 #include <atomic>
 #include <memory>
 
-#include <boost/asio.hpp>
+#include <boost/asio/ip/address.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/asio/ssl.hpp>
 
 #include "byte_slice.h"
@@ -96,16 +100,15 @@ class connection_basic_pimpl; // PIMPL for this class
 	  e_connection_type_P2P = 2  // to other p2p node (probably limited)
   };
   
-  std::string to_string(t_connection_type type);
 
-class connection_basic { // not-templated base class for rapid developmet of some code parts
+class connection_basic { // not-templated base class for rapid development of some code parts
 		// beware of removing const, net_utils::connection is sketchily doing a cast to prevent storing ptr twice
 		const std::shared_ptr<connection_basic_shared_state> m_state;
 	public:
 
 		std::unique_ptr< connection_basic_pimpl > mI; // my Implementation
 
-		// moved here from orginal connecton<> - common member variables that do not depend on template in connection<>
+		// moved here from original connection<> - common member variables that do not depend on template in connection<>
     std::atomic<bool> m_want_close_connection;
     std::atomic<bool> m_was_shutdown;
     critical_section m_send_que_lock;
@@ -165,8 +168,6 @@ class connection_basic { // not-templated base class for rapid developmet of som
 		}
 
 		// various handlers to be called from connection class:
-		void do_send_handler_write(const void * ptr , size_t cb);
-		void do_send_handler_write_from_queue(const boost::system::error_code& e, size_t cb , int q_len); // from handle_write, sending next part
 
 		void logger_handle_net_write(size_t size); // network data written
 		void logger_handle_net_read(size_t size); // network data read
@@ -183,8 +184,6 @@ class connection_basic { // not-templated base class for rapid developmet of som
 		static int get_tos_flag();
 
 		// handlers and sleep
-		void sleep_before_packet(size_t packet_size, int phase, int q_len); // execute a sleep ; phase is not really used now(?)
-		static void save_limit_to_file(int limit); ///< for dr-monero
 		static double get_sleep_time(size_t cb);
 };
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024, The Monero Project
+// Copyright (c) 2017-2026, The Monero Project
 //
 // All rights reserved.
 //
@@ -155,12 +155,12 @@ namespace ki {
       res.emplace_back();
       auto & cres = res.back();
       cres.set_out_key(key_to_string(td.get_public_key()));
-      cres.set_tx_pub_key(key_to_string(tx_pub_key));
+      cres.set_tx_pub_key(key_to_string(::crypto::pubkey_clear_torsion(tx_pub_key)));
       cres.set_internal_output_index(td.m_internal_output_index);
       cres.set_sub_addr_major(td.m_subaddr_index.major);
       cres.set_sub_addr_minor(td.m_subaddr_index.minor);
       if (!additional_tx_pub_keys.empty() && additional_tx_pub_keys.size() > td.m_internal_output_index) {
-        cres.add_additional_tx_pub_keys(key_to_string(additional_tx_pub_keys[td.m_internal_output_index]));
+        cres.add_additional_tx_pub_keys(key_to_string(::crypto::pubkey_clear_torsion(additional_tx_pub_keys[td.m_internal_output_index])));
       }
     }
 
@@ -254,7 +254,7 @@ namespace ki {
     CHECK_AND_ASSERT_THROW_MES(rct::scalarmultKey(rct::ki2rct(ki), rct::curveOrder()) == rct::identity(),
                                "Key image out of validity domain: key image " << epee::string_tools::pod_to_hex(ki));
 
-    CHECK_AND_ASSERT_THROW_MES(::crypto::check_ring_signature((const ::crypto::hash&)ki, ki, pkeys, &sig),
+    CHECK_AND_ASSERT_THROW_MES(::crypto::check_ring_signature((const ::crypto::hash&)ki, ki, pkeys.data(), pkeys.size(), &sig),
                                "Signature failed for key image " << epee::string_tools::pod_to_hex(ki)
                                                                  << ", signature " + epee::string_tools::pod_to_hex(sig)
                                                                  << ", pubkey " + epee::string_tools::pod_to_hex(*pkeys[0]));
@@ -456,10 +456,10 @@ namespace tx {
       }
     }
 
-    dst->set_real_out_tx_key(key_to_string(src.real_out_tx_key));
+    dst->set_real_out_tx_key(key_to_string(::crypto::pubkey_clear_torsion(src.real_out_tx_key)));
     dst->set_real_output_in_tx_index(src.real_output_in_tx_index);
-    if (!src.real_out_additional_tx_keys.empty()) {
-      dst->add_real_out_additional_tx_keys(key_to_string(src.real_out_additional_tx_keys.at(src.real_output_in_tx_index)));
+    if (src.real_output_in_tx_index < src.real_out_additional_tx_keys.size()) {
+      dst->add_real_out_additional_tx_keys(key_to_string(::crypto::pubkey_clear_torsion(src.real_out_additional_tx_keys.at(src.real_output_in_tx_index))));
     }
     dst->set_amount(src.amount);
     dst->set_rct(src.rct);

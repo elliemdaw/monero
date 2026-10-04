@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 //
 // All rights reserved.
 //
@@ -538,15 +538,7 @@ private:
   /*********************************************************************
    * private concrete members
    *********************************************************************/
-  /**
-   * @brief private version of pop_block, for undoing if an add_block fails
-   *
-   * This function simply calls pop_block(block& blk, std::vector<transaction>& txs)
-   * with dummy parameters, as the returns-by-reference can be discarded.
-   */
-  void pop_block();
 
-  // helper function to remove transaction from blockchain
   /**
    * @brief helper function to remove transaction from the blockchain
    *
@@ -711,11 +703,10 @@ public:
    *
    * @param folder    The path of the folder containing the database file(s) which must not end with slash '/'.
    *
-   * @return          true if the operation is succesfull
+   * @return          true if the operation is successful
    */
   virtual bool remove_data_file(const std::string& folder) const = 0;
 
-  // return the name of the folder the db's file(s) should reside in
   /**
    * @brief gets the name of the folder the BlockchainDB's file(s) should be in
    *
@@ -803,7 +794,6 @@ public:
 
   virtual void set_hard_fork(HardFork* hf);
 
-  // adds a block with the given metadata to the top of the blockchain, returns the new height
   /**
    * @brief handles the addition of a new block to BlockchainDB
    *
@@ -939,7 +929,7 @@ public:
   /**
    * @brief fetch a block's cumulative number of rct outputs
    *
-   * The subclass should return the numer of rct outputs in the blockchain
+   * The subclass should return the number of rct outputs in the blockchain
    * up to the block with the given height (inclusive).
    *
    * If the block does not exist, the subclass should throw BLOCK_DNE
@@ -1151,13 +1141,12 @@ public:
    * implements remove_* functions.
    *
    * The subclass should return by reference the popped block and
-   * its associated transactions
+   * its associated transactions, if applicable to that overload
    *
-   * @param blk return-by-reference the block which was popped
-   * @param txs return-by-reference the transactions from the popped block
+   * @param[out] blk the block which was popped
+   * @param[out] txs the non-coinbase transactions from the popped block (optional)
    */
-  virtual void pop_block(block& blk, std::vector<transaction>& txs);
-
+  virtual void pop_block(block& blk, std::vector<transaction>* txs);
 
   /**
    * @brief check if a transaction with a given hash exists
@@ -1173,7 +1162,6 @@ public:
   virtual bool tx_exists(const crypto::hash& h) const = 0;
   virtual bool tx_exists(const crypto::hash& h, uint64_t& tx_id) const = 0;
 
-  // return unlock time of tx with hash <h>
   /**
    * @brief fetch a transaction's unlock time/height
    *
@@ -1188,8 +1176,6 @@ public:
    */
   virtual uint64_t get_tx_unlock_time(const crypto::hash& h) const = 0;
 
-  // return tx with hash <h>
-  // throw if no such tx exists
   /**
    * @brief fetches the transaction with the given hash
    *
@@ -1286,12 +1272,16 @@ public:
    *
    * @param txid_template the transaction id template
    * @param nbits number of bits to compare against in the template
+   * @param category tx relay category for which to filter txs in the mempool
    * @param max_num_txs The maximum number of txids to match, if we hit this limit, throw early
    * @return std::vector<crypto::hash> the list of all matching txids
    *
    * @throw TX_EXISTS if the number of txids that match exceed `max_num_txs`
    */
-  virtual std::vector<crypto::hash> get_txids_loose(const crypto::hash& txid_template, std::uint32_t nbits, uint64_t max_num_txs = 0) = 0;
+  virtual std::vector<crypto::hash> get_txids_loose(const crypto::hash& txid_template,
+    std::uint32_t nbits,
+    relay_category category,
+    uint64_t max_num_txs = 0) = 0;
 
   /**
    * @brief fetches a variable number of blocks and transactions from the given height, in canonical blockchain order
@@ -1312,7 +1302,7 @@ public:
    *
    * @return true iff the blocks and transactions were found
    */
-  virtual bool get_blocks_from(uint64_t start_height, size_t min_block_count, size_t max_block_count, size_t max_tx_count, size_t max_size, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata>>>>& blocks, bool pruned, bool get_miner_tx_hash) const = 0;
+  virtual bool get_blocks_from(uint64_t start_height, size_t min_block_count, size_t max_block_count, size_t max_tx_count, size_t max_size, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::tuple<crypto::hash, crypto::hash, cryptonote::blobdata>>>>& blocks, bool pruned, bool get_miner_tx_hash) const = 0;
 
   /**
    * @brief fetches the prunable transaction blob with the given hash
@@ -1369,7 +1359,6 @@ public:
    */
   virtual std::vector<transaction> get_tx_list(const std::vector<crypto::hash>& hlist) const = 0;
 
-  // returns height of block that contains transaction with hash <h>
   /**
    * @brief fetches the height of a transaction's block
    *
@@ -1384,7 +1373,6 @@ public:
    */
   virtual uint64_t get_tx_block_height(const crypto::hash& h) const = 0;
 
-  // returns the total number of outputs of amount <amount>
   /**
    * @brief fetches the number of outputs of a given amount
    *
@@ -1546,14 +1534,14 @@ public:
   /**
    * @brief remove a txpool transaction
    *
-   * @param txid the transaction id of the transation to remove
+   * @param txid the transaction id of the transaction to remove
    */
   virtual void remove_txpool_tx(const crypto::hash& txid) = 0;
 
   /**
    * @brief get a txpool transaction's metadata
    *
-   * @param txid the transaction id of the transation to lookup
+   * @param txid the transaction id of the transaction to lookup
    * @param meta the metadata to return
    *
    * @return true if the tx meta was found, false otherwise
@@ -1563,7 +1551,7 @@ public:
   /**
    * @brief get a txpool transaction's blob
    *
-   * @param txid the transaction id of the transation to lookup
+   * @param txid the transaction id of the transaction to lookup
    * @param bd the blob to return
    * @param tx_category for filtering out hidden/private txes
    *
@@ -1574,7 +1562,7 @@ public:
   /**
    * @brief get a txpool transaction's blob
    *
-   * @param txid the transaction id of the transation to lookup
+   * @param txid the transaction id of the transaction to lookup
    *
    * @return the blob for that transaction
    */
@@ -1708,6 +1696,32 @@ public:
    * @return false if the function returns false for any block, otherwise true
    */
   virtual bool for_blocks_range(const uint64_t& h1, const uint64_t& h2, std::function<bool(uint64_t, const crypto::hash&, const cryptonote::block&)>) const = 0;
+
+  /**
+   * @brief runs a function over all block info in height range in order
+   *
+   * The subclass should run the passed function for each block in the
+   * specified range, passing (height, block ID, block weight) as its parameters.
+   *
+   * If any call to the function returns false, the subclass should return
+   * false. Otherwise, the subclass returns true.
+   *
+   * The subclass should throw DB_ERROR if any of the expected values are
+   * not found.
+   *
+   * @param start_height start height, inclusive
+   * @param stop_height stop height, inclusive
+   * @param f the function to run
+   *
+   * @return false if the function returns false for any block, otherwise true
+   */
+  virtual bool for_all_block_info(uint64_t start_height
+    , uint64_t stop_height
+    , const std::function<bool(/*height*/ uint64_t
+      , /*block ID*/ const crypto::hash&
+      , /*block weight*/ uint64_t
+      )> &f
+  ) const = 0;
 
   /**
    * @brief runs a function over all transactions stored

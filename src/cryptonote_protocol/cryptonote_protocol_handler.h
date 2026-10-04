@@ -55,7 +55,6 @@
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
 
-#define LOCALHOST_INT 2130706433
 #define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT 100
 static_assert(CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT >= BLOCKS_SYNCHRONIZING_DEFAULT_COUNT_PRE_V4, "Invalid CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT");
 
@@ -115,14 +114,9 @@ namespace cryptonote
     const block_queue &get_block_queue() const { return m_block_queue; }
     std::uint64_t max_average_of_blocksize_in_queue()
     {
-      std::vector<std::uint64_t> average_blocksize{0};
-      m_block_queue.foreach([&](const cryptonote::block_queue::span &span)
-      {
-        average_blocksize.push_back(span.size / span.nblocks);
-        return true; // we don't care about the return value
-      });
-      MINFO("Maximum average of blocksize for current batches : " << *std::max_element(average_blocksize.begin(), average_blocksize.end()));
-      return *std::max_element(average_blocksize.begin(), average_blocksize.end());
+      const uint64_t max_average = m_block_queue.get_max_block_size_average();
+      MINFO("Maximum average of blocksize for current batches : " << max_average);
+      return max_average;
     }
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
@@ -164,7 +158,6 @@ namespace cryptonote
     //bool get_payload_sync_data(HANDSHAKE_DATA::request& hshd, cryptonote_connection_context& context);
     bool should_drop_connection(cryptonote_connection_context& context, uint32_t next_stripe);
     bool request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span = false);
-    size_t get_synchronizing_connections_count();
     bool on_connection_synchronized();
     bool should_download_next_span(cryptonote_connection_context& context, bool standby);
     bool should_ask_for_pruned_data(cryptonote_connection_context& context, uint64_t first_block_height, uint64_t nblocks, bool check_block_weights) const;
@@ -180,7 +173,7 @@ namespace cryptonote
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);
     void hit_score(cryptonote_connection_context &context, int32_t score);
-    void calculate_dynamic_span(const double blocks_per_seconds);
+    void calculate_block_queue_limit(double blocks_per_second);
 
     t_core& m_core;
 
@@ -193,6 +186,7 @@ namespace cryptonote
     std::atomic<bool> m_ask_for_txpool_complement;
     boost::mutex m_sync_lock;
     block_queue m_block_queue;
+    boost::mutex m_check_span_queue_mutex;
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
@@ -205,9 +199,8 @@ namespace cryptonote
     uint64_t m_sync_download_chain_size, m_sync_download_objects_size;
     size_t m_block_download_max_size;
     bool m_sync_pruned_blocks;
-    size_t m_span_time;
-    std::atomic<size_t> m_span_limit;
-    std::atomic<size_t> m_bss;
+    size_t m_block_sync_queue_time;
+    std::atomic<uint64_t> m_block_queue_limit;
 
     // Values for sync time estimates
     boost::posix_time::ptime m_sync_start_time;

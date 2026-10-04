@@ -33,6 +33,7 @@
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
+#include <unordered_set>
 
 #include <boost/uuid/nil_generator.hpp>
 #include <boost/utility/string_ref.hpp>
@@ -50,6 +51,7 @@ constexpr size_t restricted_max_fake_outs = 5000;
 constexpr auto restricted_histogram_cutoff = std::chrono::hours{3 * 24};
 constexpr size_t restricted_max_txs = 100;
 constexpr size_t restricted_max_key_images = 5000;
+constexpr size_t restricted_max_block_headers = 1000;
 }
 
 namespace cryptonote
@@ -138,9 +140,9 @@ namespace rpc
 
   void DaemonHandler::handle(const GetBlocksFast::Request& req, GetBlocksFast::Response& res)
   {
-    std::vector<std::pair<std::pair<blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, blobdata> > > > blocks;
+    std::vector<std::pair<std::pair<blobdata, crypto::hash>, std::vector<std::tuple<crypto::hash, crypto::hash, blobdata> > > > blocks;
 
-    if(!m_core.find_blockchain_supplement(req.start_height, req.block_ids, blocks, res.current_height, res.top_block_hash, res.start_height, req.prune, true, COMMAND_RPC_GET_BLOCKS_FAST_MAX_BLOCK_COUNT, COMMAND_RPC_GET_BLOCKS_FAST_MAX_TX_COUNT))
+    if(!m_core.find_blockchain_supplement(req.start_height, req.block_ids, blocks, res.current_height, res.top_block_hash, res.start_height, req.prune, true, false, COMMAND_RPC_GET_BLOCKS_FAST_MAX_BLOCK_COUNT, COMMAND_RPC_GET_BLOCKS_FAST_MAX_TX_COUNT))
     {
       res.status = Message::STATUS_FAILED;
       res.error_details = "core::find_blockchain_supplement() returned false";
@@ -197,8 +199,8 @@ namespace rpc
         bwt.transactions.back().pruned = req.prune;
 
         const bool parsed = req.prune ?
-          parse_and_validate_tx_base_from_blob(blob.second, bwt.transactions.back()) :
-          parse_and_validate_tx_from_blob(blob.second, bwt.transactions.back());
+          parse_and_validate_tx_base_from_blob(std::get<2>(blob), bwt.transactions.back()) :
+          parse_and_validate_tx_from_blob(std::get<2>(blob), bwt.transactions.back());
         if (!parsed)
         {
           res.blocks.clear();
@@ -280,6 +282,7 @@ namespace rpc
     // if any missing from blockchain, check in tx pool
     if (!missed_vec.empty())
     {
+      std::unordered_set<crypto::hash> missed_set(missed_vec.begin(), missed_vec.end());
       std::vector<cryptonote::transaction> pool_txs;
 
       m_core.get_pool_transactions(pool_txs);
@@ -288,17 +291,15 @@ namespace rpc
       {
         crypto::hash h = get_transaction_hash(tx);
 
-        auto itr = std::find(missed_vec.begin(), missed_vec.end(), h);
-
-        if (itr != missed_vec.end())
+        if (missed_set.erase(h))
         {
           found_hashes.push_back(h);
           found_txs_vec.push_back(tx);
           heights.push_back(std::numeric_limits<uint64_t>::max());
           in_pool.push_back(true);
-          missed_vec.erase(itr);
         }
       }
+      missed_vec.assign(missed_set.begin(), missed_set.end());
     }
 
     for (size_t i=0; i < found_hashes.size(); i++)
@@ -557,17 +558,17 @@ namespace rpc
 
     res.info.tx_count = chain.get_total_transactions() - res.info.height; //without coinbase
 
-    res.info.tx_pool_size = m_core.get_pool_transactions_count();
+    res.info.tx_pool_size = m_core.get_pool_transactions_count(!m_restricted);
 
-    res.info.alt_blocks_count = chain.get_alternative_blocks_count();
+    res.info.alt_blocks_count = m_restricted ? 0 : chain.get_alternative_blocks_count();
 
-    uint64_t total_conn = m_p2p.get_public_connections_count();
-    res.info.outgoing_connections_count = m_p2p.get_public_outgoing_connections_count();
-    res.info.incoming_connections_count = total_conn - res.info.outgoing_connections_count;
+    uint64_t total_conn = m_restricted ? 0 : m_p2p.get_public_connections_count();
+    res.info.outgoing_connections_count = m_restricted ? 0 : m_p2p.get_public_outgoing_connections_count();
+    res.info.incoming_connections_count = m_restricted ? 0 : total_conn - res.info.outgoing_connections_count;
 
-    res.info.white_peerlist_size = m_p2p.get_public_white_peers_count();
+    res.info.white_peerlist_size = m_restricted ? 0 : m_p2p.get_public_white_peers_count();
 
-    res.info.grey_peerlist_size = m_p2p.get_public_gray_peers_count();
+    res.info.grey_peerlist_size = m_restricted ? 0 : m_p2p.get_public_gray_peers_count();
 
     res.info.mainnet = m_core.get_nettype() == MAINNET;
     res.info.testnet = m_core.get_nettype() == TESTNET;
@@ -577,8 +578,8 @@ namespace rpc
     res.info.block_size_limit = res.info.block_weight_limit = m_core.get_blockchain_storage().get_current_cumulative_block_weight_limit();
     res.info.block_size_median = res.info.block_weight_median = m_core.get_blockchain_storage().get_current_cumulative_block_weight_median();
     res.info.adjusted_time = m_core.get_blockchain_storage().get_adjusted_time(res.info.height);
-    res.info.start_time = (uint64_t)m_core.get_start_time();
-    res.info.version = MONERO_VERSION;
+    res.info.start_time = m_restricted ? 0 : (uint64_t)m_core.get_start_time();
+    res.info.version = m_restricted ? "" : MONERO_VERSION;
 
     res.status = Message::STATUS_OK;
     res.error_details = "";
@@ -697,6 +698,13 @@ namespace rpc
 
   void DaemonHandler::handle(const GetBlockHeadersByHeight::Request& req, GetBlockHeadersByHeight::Response& res)
   {
+    if (m_restricted && req.heights.size() > restricted_max_block_headers)
+    {
+      res.status = Message::STATUS_FAILED;
+      res.error_details = "Too many block headers requested in restricted mode";
+      return;
+    }
+
     res.headers.resize(req.heights.size());
 
     for (size_t i=0; i < req.heights.size(); i++)

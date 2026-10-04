@@ -40,8 +40,8 @@
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
+#include "scope_guard.h"
 #include "wipeable_string.h"
-#include "misc_language.h"
 #include "int-util.h"
 #include "mnemonics/electrum-words.h"
 #include <boost/crc.hpp>
@@ -81,7 +81,7 @@ namespace
 
   /*!
    * \brief Finds the word list that contains the seed words and puts the indices
-   *        where matches occured in matched_indices.
+   *        where matches occurred in matched_indices.
    * \param  seed            List of words to match.
    * \param  has_checksum    The seed has a checksum word (maybe not checked).
    * \param  matched_indices The indices where the seed words were found are added to this.
@@ -291,7 +291,8 @@ namespace crypto
       }
 
       std::vector<uint32_t> matched_indices;
-      auto wiper = epee::misc_utils::create_scope_leave_handler([&](){memwipe(matched_indices.data(), matched_indices.size() * sizeof(matched_indices[0]));});
+      const epee::scope_guard wiper([&](){
+        memwipe(matched_indices.data(), matched_indices.size() * sizeof(matched_indices[0]));});
       Language::Base *language;
       if (!find_seed_language(seed, has_checksum, matched_indices, &language))
       {
@@ -369,6 +370,66 @@ namespace crypto
       }
       dst = *(const crypto::secret_key*)s.data();
       return true;
+    }
+
+    epee::wipeable_string normalize_mnemonic(const epee::wipeable_string &words)
+    {
+      epee::wipeable_string normalized;
+      bool pending_space = false;
+
+      for (size_t i = 0; i < words.size(); ++i)
+      {
+        const char c = words.data()[i];
+        // Space, CR, LF, tab, vertical tab, form feed
+        if (c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\v' || c == '\f')
+        {
+          pending_space = !normalized.empty();
+          continue;
+        }
+
+        if (pending_space)
+          normalized.push_back(' ');
+        normalized.push_back(c);
+        pending_space = false;
+      }
+
+      return normalized;
+    }
+
+    bool words_to_bytes_ex(const epee::wipeable_string &words, crypto::secret_key& dst,
+      std::string &language_name, bool &is_polyseed, polyseed::data &polyseed)
+    {
+      is_polyseed = false;
+      polyseed::language polyseed_language;
+      const epee::wipeable_string normalized_words = normalize_mnemonic(words);
+
+      try
+      {
+        epee::wipeable_string zero_terminated_words(normalized_words);
+        zero_terminated_words.push_back('\0');
+        polyseed_language = polyseed.decode(zero_terminated_words.data());
+        is_polyseed = true;
+      }
+      catch (const polyseed::error &e)
+      {
+        if (e.status() != POLYSEED_ERR_NUM_WORDS) {
+          // Probably a Polyseed, because the number of words is ok, but with some error: Don't try as a legacy seed and stop
+          MERROR("Invalid seed: Not a valid Polyseed");
+          return false;
+        }
+      }
+      catch (const std::exception &e)
+      {
+      }
+
+      if (is_polyseed)
+      {
+        polyseed.keygen(&dst, sizeof(crypto::secret_key));
+        language_name = polyseed_language.name();
+        return true;
+      }
+
+      return words_to_bytes(normalized_words, dst, language_name);
     }
 
     /*!
@@ -457,13 +518,24 @@ namespace crypto
      * \brief Gets a list of seed languages that are supported.
      * \param languages The vector is set to the list of languages.
      */
-    void get_language_list(std::vector<std::string> &languages, bool english)
+    void get_language_list(std::vector<std::string> &languages, bool english, bool polyseed)
     {
-      const std::vector<const Language::Base*> language_instances = get_language_list();
-      for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin();
-        it != language_instances.end(); it++)
+      if (polyseed)
       {
-        languages.push_back(english ? (*it)->get_english_language_name() : (*it)->get_language_name());
+        const std::vector<polyseed::language>& polyseed_languages = polyseed::get_langs();
+        for (auto polyseed_language: polyseed_languages)
+        {
+          languages.push_back(english ? polyseed_language.name_en() : polyseed_language.name());
+        }
+      }
+      else
+      {
+        const std::vector<const Language::Base*> language_instances = get_language_list();
+        for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin();
+          it != language_instances.end(); it++)
+        {
+          languages.push_back(english ? (*it)->get_english_language_name() : (*it)->get_language_name());
+        }
       }
     }
 
@@ -479,25 +551,52 @@ namespace crypto
       return word_list.size() != (seed_length + 1);
     }
 
-    std::string get_english_name_for(const std::string &name)
+    std::string get_english_name_for(const std::string &name, bool polyseed)
     {
-      const std::vector<const Language::Base*> language_instances = get_language_list();
-      for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin();
-        it != language_instances.end(); it++)
+      if (polyseed)
       {
-        if ((*it)->get_language_name() == name)
-          return (*it)->get_english_language_name();
+        const std::vector<polyseed::language>& polyseed_languages = polyseed::get_langs();
+        for (auto polyseed_language: polyseed_languages)
+        {
+          if (polyseed_language.name() == name)
+          {
+            return polyseed_language.name_en();
+          }
+        }
+      }
+      else
+      {
+        const std::vector<const Language::Base*> language_instances = get_language_list();
+        for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin();
+          it != language_instances.end(); it++)
+        {
+          if ((*it)->get_language_name() == name)
+            return (*it)->get_english_language_name();
+        }
       }
       return "<language not found>";
     }
 
-    bool is_valid_language(const std::string &language)
+    bool is_valid_language(const std::string &language, bool polyseed)
     {
-      const std::vector<const Language::Base*> language_instances = get_language_list();
-      for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin(); it != language_instances.end(); it++)
-        if ((*it)->get_english_language_name() == language || (*it)->get_language_name() == language)
-          return true;
-      return false;
+      if (polyseed)
+      {
+        const std::vector<polyseed::language>& polyseed_languages = polyseed::get_langs();
+        for (auto polyseed_language: polyseed_languages)
+        {
+          if (polyseed_language.name_en() == language || polyseed_language.name() == language)
+            return true;
+        }
+        return false;
+      }
+      else
+      {
+        const std::vector<const Language::Base*> language_instances = get_language_list();
+        for (std::vector<const Language::Base*>::const_iterator it = language_instances.begin(); it != language_instances.end(); it++)
+          if ((*it)->get_english_language_name() == language || (*it)->get_language_name() == language)
+            return true;
+        return false;
+      }
     }
   }
 

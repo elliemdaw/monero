@@ -81,10 +81,9 @@ namespace hw {
       static const char *to_string(unsigned int code);
     };
 
-    // Must be sorted in ascending order by the code
     #define LEDGER_STATUS(status) {status, #status}
     constexpr Status status_codes[] = {
-      LEDGER_STATUS(SW_OK),
+      LEDGER_STATUS(SW_LOCKED_DEVICE),
       LEDGER_STATUS(SW_WRONG_LENGTH),
       LEDGER_STATUS(SW_SECURITY_PIN_LOCKED),
       LEDGER_STATUS(SW_SECURITY_LOAD_KEY),
@@ -98,7 +97,6 @@ namespace hw {
       LEDGER_STATUS(SW_SECURITY_INTERNAL),
       LEDGER_STATUS(SW_SECURITY_MAX_SIGNATURE_REACHED),
       LEDGER_STATUS(SW_SECURITY_PREFIX_HASH),
-      LEDGER_STATUS(SW_SECURITY_LOCKED),
       LEDGER_STATUS(SW_COMMAND_NOT_ALLOWED),
       LEDGER_STATUS(SW_SUBCOMMAND_NOT_ALLOWED),
       LEDGER_STATUS(SW_DENY),
@@ -106,12 +104,23 @@ namespace hw {
       LEDGER_STATUS(SW_WRONG_DATA),
       LEDGER_STATUS(SW_WRONG_DATA_RANGE),
       LEDGER_STATUS(SW_IO_FULL),
+      LEDGER_STATUS(SW_SECURITY_LOCKED),
       LEDGER_STATUS(SW_CLIENT_NOT_SUPPORTED),
       LEDGER_STATUS(SW_WRONG_P1P2),
       LEDGER_STATUS(SW_INS_NOT_SUPPORTED),
       LEDGER_STATUS(SW_PROTOCOL_NOT_SUPPORTED),
-      LEDGER_STATUS(SW_UNKNOWN)
+      LEDGER_STATUS(SW_UNKNOWN),
+      LEDGER_STATUS(SW_OK)
     };
+
+    constexpr bool status_codes_sorted()
+    {
+      for (size_t i = 1; i < sizeof(status_codes) / sizeof(status_codes[0]); ++i)
+        if (!(status_codes[i-1].code < status_codes[i].code))
+          return false;
+      return true;
+    }
+    static_assert(status_codes_sorted(), "status_codes must be sorted in ascending order by the code");
 
     const char *Status::to_string(unsigned int code)
     {
@@ -303,6 +312,7 @@ namespace hw {
       this->reset_buffer();      
       this->mode = NONE;
       this->has_view_key = false;
+      this->requested_view_key = false;
       this->tx_in_progress = false;
       MDEBUG( "Device "<<this->id <<" Created");
     }
@@ -331,7 +341,7 @@ namespace hw {
       MDEBUG( "Device "<<this->name << " LOCKed");
     }
 
-    //lock the device for a long sequence
+    //try to lock the device for a long sequence
     bool device_ledger::try_lock(void) {
       MDEBUG( "Ask for LOCKING(try) for device "<<this->name << " in thread ");
       bool r = device_locker.try_lock();
@@ -343,7 +353,7 @@ namespace hw {
       return r;
     }
 
-    //lock the device for a long sequence
+    //unlock the device for a long sequence
     void device_ledger::unlock(void) {
       try {
         MDEBUG( "Ask for UNLOCKING for device "<<this->name << " in thread ");
@@ -440,6 +450,25 @@ namespace hw {
       }
     }
 
+    bool device_ledger::soft_request_view_key() {
+      const std::lock_guard lock_dev(this->device_locker); // recursive is needed due to call to get_secret_keys()
+      if (this->has_view_key)
+        return true;
+      else if (this->requested_view_key)
+        return false;
+
+      this->requested_view_key = true;
+      try
+      {
+        crypto::secret_key v, s;
+        this->get_secret_keys(v, s);
+      }
+      catch (...)
+      { /* error message is logged in get_secret_keys()*/ }
+
+      return this->has_view_key;
+    }
+
     bool device_ledger::reset() {
       reset_buffer();
       int offset = set_command_header_noopt(INS_RESET);
@@ -468,6 +497,7 @@ namespace hw {
       MDEBUG("Device "<< this->id << " exchange: sw: " << this->sw << " expected: " << ok);
       ASSERT_X(sw != SW_CLIENT_NOT_SUPPORTED, "Monero Ledger App doesn't support current monero version. Try to update the Monero Ledger App, at least " << MINIMAL_APP_VERSION_MAJOR<< "." << MINIMAL_APP_VERSION_MINOR << "." << MINIMAL_APP_VERSION_MICRO << " is required.");
       ASSERT_X(sw != SW_PROTOCOL_NOT_SUPPORTED, "Make sure no other program is communicating with the Ledger.");
+      ASSERT_X(sw != SW_LOCKED_DEVICE, "Ledger is locked.");
       ASSERT_SW(this->sw,ok,mask);
 
       return this->sw;
@@ -485,6 +515,7 @@ namespace hw {
         // cancel on device
         deny = 1;
       } else {
+        ASSERT_X(this->sw != SW_LOCKED_DEVICE, "Ledger is locked.");
         ASSERT_SW(this->sw,ok,mask);
       }
 
@@ -523,6 +554,8 @@ namespace hw {
       return true;
     }
     
+    #define LEDGER_VID 0x2c97
+
     static const std::vector<hw::io::hid_conn_params> known_devices {
         {0x2c97, 0x0001, 0, 0xffa0}, 
         {0x2c97, 0x0004, 0, 0xffa0},       
@@ -532,17 +565,47 @@ namespace hw {
         {0x2c97, 0x0008, 0, 0xffa0},
     };
 
+    // A Ledger reports a different product id depending on whether an app is running,
+    // so a device with no app open matches none of known_devices and is otherwise
+    // indistinguishable from an absent one.
+    static bool find_ledger_without_app(unsigned int &pid) {
+      for (const auto &device: known_devices) {
+        if (hid_device_info *info = hid_enumerate(device.vid, device.pid)) {
+          hid_free_enumeration(info);
+          return false;
+        }
+      }
+      if (hid_device_info *info = hid_enumerate(LEDGER_VID, 0x0000)) {
+        pid = info->product_id;
+        hid_free_enumeration(info);
+        return true;
+      }
+      return false;
+    }
+
     bool device_ledger::connect(void) {
       this->disconnect();
+
+      unsigned int pid = 0;
+      if (find_ledger_without_app(pid)) {
+        // Ask the Ledger OS for the running application: a locked device answers
+        // SW_LOCKED_DEVICE, an unlocked one answers from its dashboard.
+        unsigned char command[] = {0xb0, 0x01, 0x00, 0x00, 0x00};
+        unsigned char response[BUFFER_RECV_SIZE];
+        hw_device.connect(LEDGER_VID, pid, 0, 0xffa0);
+        const int recv = hw_device.exchange(command, sizeof(command), response, sizeof(response), false);
+        hw_device.disconnect();
+        ASSERT_X(recv >= 2, "Communication error, less than two bytes received");
+        ASSERT_X(((response[recv-2]<<8) | response[recv-1]) != SW_LOCKED_DEVICE, "Ledger is locked.");
+        ASSERT_X(false, "Open the Monero app on your Ledger.");
+      }
+
       hw_device.connect(known_devices);
       this->reset();
       #ifdef DEBUG_HWDEVICE
       cryptonote::account_public_address pubkey;
       this->get_public_address(pubkey);
       #endif
-      crypto::secret_key vkey;
-      crypto::secret_key skey;
-      this->get_secret_keys(vkey,skey);
 
       return true;
     }
@@ -553,6 +616,9 @@ namespace hw {
 
     bool device_ledger::disconnect() {
       hw_device.disconnect();
+      this->viewkey.scrub();
+      this->has_view_key = false;
+      this->requested_view_key = false;
       return true;
     }
 
@@ -612,11 +678,11 @@ namespace hw {
     bool  device_ledger::get_secret_keys(crypto::secret_key &vkey , crypto::secret_key &skey) {
         AUTO_LOCK_CMD();
 
-        //secret key are represented as fake key on the wallet side
+        //secret keys are represented as fake keys on the wallet side
         memset(vkey.data, 0x00, 32);
         memset(skey.data, 0xFF, 32);
 
-        //spcialkey, normal conf handled in decrypt
+        //special key, normal conf handled in decrypt
         send_simple(INS_GET_KEY, 0x02);
 
         //View key is retrieved, if allowed, to speed up blockchain parsing
@@ -633,6 +699,15 @@ namespace hw {
         memmove(dbg_viewkey.data, this->buffer_recv+0, 32);
         memmove(dbg_spendkey.data, this->buffer_recv+32, 32);
         #endif
+
+        return true;
+    }
+
+    bool device_ledger::get_cached_view_key(crypto::secret_key &viewkey_out) {
+        AUTO_LOCK_CMD();
+
+        if (!this->soft_request_view_key()) return false;
+        viewkey_out = this->viewkey;
 
         return true;
     }
@@ -688,7 +763,7 @@ namespace hw {
         #ifdef DEBUG_HWDEVICE
         const crypto::public_key pub_x = pub;
         crypto::key_derivation derivation_x;
-         if ((this->mode == TRANSACTION_PARSE) && has_view_key) {    
+         if ((this->mode == TRANSACTION_PARSE) && this->soft_request_view_key()) {
           derivation_x = derivation;
         } else {
           derivation_x = hw::ledger::decrypt(derivation);
@@ -703,7 +778,7 @@ namespace hw {
         log_hexbuffer("derive_subaddress_public_key: [[OUT]] derived_pub", derived_pub_x.data, 32);
         #endif
 
-      if ((this->mode == TRANSACTION_PARSE) && has_view_key) {     
+      if ((this->mode == TRANSACTION_PARSE) && this->soft_request_view_key()) {
         //If we are in TRANSACTION_PARSE, the given derivation has been retrieved unencrypted (without the help
         //of the device), so continue that way.
         MDEBUG( "derive_subaddress_public_key  : PARSE mode with known viewkey");     
@@ -739,7 +814,7 @@ namespace hw {
     }
 
     crypto::public_key device_ledger::get_subaddress_spend_public_key(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) {
-        if (has_view_key) {
+        if (this->soft_request_view_key()) {
             cryptonote::account_keys keys_{keys};
             keys_.m_view_secret_key = this->viewkey;
             return this->controle_device->get_subaddress_spend_public_key(keys_, index);
@@ -796,7 +871,7 @@ namespace hw {
     }
 
     cryptonote::account_public_address device_ledger::get_subaddress(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) {
-        if (has_view_key) {
+        if (this->soft_request_view_key()) {
             cryptonote::account_keys keys_{keys};
             keys_.m_view_secret_key = this->viewkey;
             return this->controle_device->get_subaddress(keys_, index);
@@ -1063,7 +1138,7 @@ namespace hw {
         log_hexbuffer("generate_key_derivation: [[OUT]] derivation", derivation_x.data, 32);
         #endif
 
-      if ((this->mode == TRANSACTION_PARSE)  && has_view_key) {
+      if ((this->mode == TRANSACTION_PARSE)  && this->soft_request_view_key()) {
         //A derivation is requested in PARSE mode and we have the view key,
         //so do that without the device and return the derivation unencrypted.
         MDEBUG( "generate_key_derivation  : PARSE mode with known viewkey");     
@@ -1091,7 +1166,7 @@ namespace hw {
       }
       #ifdef DEBUG_HWDEVICE
       crypto::key_derivation derivation_clear ;
-      if ((this->mode == TRANSACTION_PARSE)  && has_view_key) {
+      if ((this->mode == TRANSACTION_PARSE)  && this->soft_request_view_key()) {
         derivation_clear  = derivation;
       } else {
         derivation_clear  = hw::ledger::decrypt(derivation);
@@ -1315,7 +1390,7 @@ namespace hw {
     bool device_ledger::derive_view_tag(const crypto::key_derivation &derivation, const std::size_t output_index, crypto::view_tag &view_tag){
       #ifdef DEBUG_HWDEVICE
       crypto::key_derivation derivation_x;
-      if ((this->mode == TRANSACTION_PARSE) && has_view_key) {
+      if ((this->mode == TRANSACTION_PARSE) && this->soft_request_view_key()) {
         derivation_x = derivation;
       } else {
         derivation_x = hw::ledger::decrypt(derivation);
@@ -1328,7 +1403,7 @@ namespace hw {
       log_hexbuffer("derive_view_tag: [[OUT]] view_tag ", &view_tag_x.data, 1);
       #endif
 
-      if ((this->mode == TRANSACTION_PARSE) && has_view_key) {
+      if ((this->mode == TRANSACTION_PARSE) && this->soft_request_view_key()) {
         //If we are in TRANSACTION_PARSE, the given derivation has been retrieved unencrypted (without the help
         //of the device), so continue that way.
         MDEBUG( "derive_view_tag  : PARSE mode with known viewkey");
@@ -1510,7 +1585,7 @@ namespace hw {
 
       this->buffer_send[4] = offset-5;
       this->length_send = offset;
-      this->exchange_wait_on_input();
+      CHECK_AND_ASSERT_THROW_MES(this->exchange_wait_on_input() == 0, "Transaction denied on device.");
 
       //hash remains
       int cnt = 0;
@@ -2170,7 +2245,7 @@ namespace hw {
           offset += 1;
           //xx
           this->send_secret(xx[j].bytes, offset);
-          //alpa
+          //alpha
           this->send_secret(alpha[j].bytes, offset);
 
           this->buffer_send[4] = offset-5;
@@ -2316,7 +2391,7 @@ namespace hw {
         int offset = set_command_header_noopt(INS_CLSAG, 0x03);
 
         //c
-        //discard, unse internal one
+        //discard, use internal one
         //a
         this->send_secret(a.bytes, offset);
         //p

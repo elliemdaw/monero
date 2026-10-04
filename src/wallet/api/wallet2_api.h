@@ -88,7 +88,7 @@ struct PendingTransaction
     virtual uint64_t fee() const = 0;
     virtual std::vector<std::string> txid() const = 0;
     /*!
-     * \brief txCount - number of transactions current transaction will be splitted to
+     * \brief txCount - number of transactions current transaction will be split into
      * \return
      */
     virtual uint64_t txCount() const = 0;
@@ -140,10 +140,11 @@ struct UnsignedTransaction
     // returns a string with information about all transactions.
     virtual std::string confirmationMessage() const = 0;
     virtual std::vector<std::string> paymentId() const = 0;
+    // returns one address per destination, in the same order as amount().
     virtual std::vector<std::string> recipientAddress() const = 0;
     virtual uint64_t minMixinCount() const = 0;
     /*!
-     * \brief txCount - number of transactions current transaction will be splitted to
+     * \brief txCount - number of transactions current transaction will be split into
      * \return
      */
     virtual uint64_t txCount() const = 0;
@@ -368,7 +369,7 @@ struct WalletListener
     virtual void newBlock(uint64_t height) = 0;
 
     /**
-     * @brief updated  - generic callback, called when any event (sent/received/block reveived/etc) happened with the wallet;
+     * @brief updated  - generic callback, called when any event (sent/received/block received/etc) happened with the wallet;
      */
     virtual void updated() = 0;
 
@@ -442,6 +443,19 @@ struct Wallet
         BackgroundSync_Off = 0,
         BackgroundSync_ReusePassword = 1,
         BackgroundSync_CustomPassword = 2
+    };
+
+    enum MessageSignatureType {
+        MessageSignatureType_Invalid = 0,
+        MessageSignatureType_Spend,
+        MessageSignatureType_View
+    };
+
+    struct MessageSignatureResult {
+        bool valid = false;
+        unsigned version = 0;
+        bool old = false;
+        MessageSignatureType type = MessageSignatureType_Invalid;
     };
 
     virtual ~Wallet() = 0;
@@ -546,6 +560,8 @@ struct Wallet
      * \return  - true on success
      */
     virtual bool init(const std::string &daemon_address, uint64_t upper_transaction_size_limit = 0, const std::string &daemon_username = "", const std::string &daemon_password = "", bool use_ssl = false, bool lightWallet = false, const std::string &proxy_address = "") = 0;
+    virtual void allowMismatchedDaemonVersion(bool allow_mismatch) = 0;
+    virtual void setRingDatabase(const std::string &path) = 0;
 
    /*!
     * \brief createWatchOnly - Creates a watch only wallet
@@ -586,8 +602,8 @@ struct Wallet
     /*!
      * \brief setSubaddressLookahead - set size of subaddress lookahead
      *
-     * \param major - size fot the major index
-     * \param minor - size fot the minor index
+     * \param major - size for the major index
+     * \param minor - size for the minor index
      */
     virtual void setSubaddressLookahead(uint32_t major, uint32_t minor) = 0;
 
@@ -699,7 +715,11 @@ struct Wallet
     static void warning(const std::string &category, const std::string &str);
     static void error(const std::string &category, const std::string &str);
 
-   /**
+    virtual bool getPolyseed(std::string &seed, uint64_t &birthday, bool &is_encrypted) const = 0;
+    static bool createPolyseed(std::string &seed_words, std::string &err, const std::string &language = "English");
+    static std::vector<std::pair<std::string, std::string>> getPolyseedLanguages();
+
+  /**
     * @brief StartRefresh - Start/resume refresh thread (refresh every 10 seconds)
     */
     virtual void startRefresh() = 0;
@@ -726,7 +746,7 @@ struct Wallet
     virtual bool rescanBlockchain() = 0;
 
     /**
-     * @brief rescanBlockchainAsync - rescans wallet asynchronously, starting from genesys
+     * @brief rescanBlockchainAsync - rescans wallet asynchronously, starting from genesis
      */
     virtual void rescanBlockchainAsync() = 0;
 
@@ -811,7 +831,7 @@ struct Wallet
     virtual std::string getMultisigKeyExchangeBooster(const std::vector<std::string> &info, const uint32_t threshold, const uint32_t num_signers) = 0;
     /**
      * @brief exportMultisigImages - exports transfers' key images
-     * @param images - output paramter for hex encoded array of images
+     * @param images - output parameter for hex encoded array of images
      * @return true if success
      */
     virtual bool exportMultisigImages(std::string& images) = 0;
@@ -991,7 +1011,7 @@ struct Wallet
      */
     virtual uint32_t defaultMixin() const = 0;
     /*!
-     * \brief setDefaultMixin - setum number of mixins to be used for new transactions
+     * \brief setDefaultMixin - sets the number of mixins to be used for new transactions
      * \param arg
      */
     virtual void setDefaultMixin(uint32_t arg) = 0;
@@ -1049,6 +1069,14 @@ struct Wallet
      * \return true if the signature verified, false otherwise
      */
     virtual bool verifySignedMessage(const std::string &message, const std::string &addres, const std::string &signature) const = 0;
+    /*!
+     * \brief verifySignedMessageWithDetails - verify a signature and identify the signing key and algorithm
+     * \param message - the message (arbitrary byte data)
+     * \param address - the address the signature claims to be made with
+     * \param signature - the signature
+     * \return the verification result, including the signature version and key type
+     */
+    virtual MessageSignatureResult verifySignedMessageWithDetails(const std::string &message, const std::string &address, const std::string &signature) const = 0;
 
     /*!
      * \brief signMultisigParticipant   signs given message with the multisig public signer key
@@ -1082,15 +1110,6 @@ struct Wallet
     */
     virtual void setOffline(bool offline) = 0;
     virtual bool isOffline() const = 0;
-    
-    //! blackballs a set of outputs
-    virtual bool blackballOutputs(const std::vector<std::string> &outputs, bool add) = 0;
-
-    //! blackballs an output
-    virtual bool blackballOutput(const std::string &amount, const std::string &offset) = 0;
-
-    //! unblackballs an output
-    virtual bool unblackballOutput(const std::string &amount, const std::string &offset) = 0;
 
     //! gets the ring used for a key image, if any
     virtual bool getRing(const std::string &key_image, std::vector<uint64_t> &ring) const = 0;
@@ -1295,6 +1314,27 @@ struct WalletManager
                                             WalletListener * listener = nullptr) = 0;
 
     /*!
+     * \brief creates a wallet from a Polyseed mnemonic phrase
+     * \param path                         Name of the wallet file to be created
+     * \param password                     Password of wallet file
+     * \param nettype                      Network type
+     * \param mnemonic                     Polyseed mnemonic
+     * \param passphrase                   Optional seed offset passphrase
+     * \param newWallet                    Whether it is a new wallet
+     * \param restoreHeight                Override the embedded restore height if recovering
+     * \param kdf_rounds                   Number of rounds for key derivation function
+     * @return
+     */
+    virtual Wallet * createWalletFromPolyseed(const std::string &path,
+                                              const std::string &password,
+                                              NetworkType nettype,
+                                              const std::string &mnemonic,
+                                              const std::string &passphrase = "",
+                                              bool newWallet = true,
+                                              uint64_t restore_height = 0,
+                                              uint64_t kdf_rounds = 1) = 0;
+
+/*!
      * \brief Closes wallet. In case operation succeeded, wallet object deleted. in case operation failed, wallet object not deleted
      * \param wallet        previously opened / created wallet instance
      * \return              None

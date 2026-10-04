@@ -80,9 +80,16 @@ public:
     bool recoverFromDevice(const std::string &path,
                            const std::string &password,
                            const std::string &device_name);
+    bool createFromPolyseed(const std::string &path,
+                             const std::string &password,
+                             const std::string &seed,
+                             const std::string &passphrase = "",
+                             bool newWallet = true,
+                             uint64_t restoreHeight = 0);
     Device getDeviceType() const override;
     bool close(bool store = true);
     std::string seed(const std::string& seed_offset = "") const override;
+    bool getPolyseed(std::string &seed_words, uint64_t& birthday, bool& is_encrypted) const override;
     std::string getSeedLanguage() const override;
     void setSeedLanguage(const std::string &arg) override;
     // void setListener(Listener *) {}
@@ -106,6 +113,8 @@ public:
     std::string filename() const override;
     std::string keysFilename() const override;
     bool init(const std::string &daemon_address, uint64_t upper_transaction_size_limit = 0, const std::string &daemon_username = "", const std::string &daemon_password = "", bool use_ssl = false, bool lightWallet = false, const std::string &proxy_address = "") override;
+    void allowMismatchedDaemonVersion(bool allow_mismatch) override;
+    void setRingDatabase(const std::string &path) override;
     bool connectToDaemon() override;
     ConnectionStatus connected() const override;
     void setTrustedDaemon(bool arg) override;
@@ -209,6 +218,7 @@ public:
     virtual bool checkReserveProof(const std::string &address, const std::string &message, const std::string &signature, bool &good, uint64_t &total, uint64_t &spent) const override;
     virtual std::string signMessage(const std::string &message, const std::string &address) override;
     virtual bool verifySignedMessage(const std::string &message, const std::string &address, const std::string &signature) const override;
+    virtual MessageSignatureResult verifySignedMessageWithDetails(const std::string &message, const std::string &address, const std::string &signature) const override;
     virtual std::string signMultisigParticipant(const std::string &message) const override;
     virtual bool verifyMessageWithPublicKey(const std::string &message, const std::string &publicKey, const std::string &signature) const override;
     virtual void startRefresh() override;
@@ -216,9 +226,6 @@ public:
     virtual bool parse_uri(const std::string &uri, std::string &address, std::string &payment_id, uint64_t &amount, std::string &tx_description, std::string &recipient_name, std::vector<std::string> &unknown_parameters, std::string &error) override;
     virtual std::string make_uri(const std::string &address, const std::string &payment_id, uint64_t amount, const std::string &tx_description, const std::string &recipient_name, std::string &error) const override;
     virtual std::string getDefaultDataDir() const override;
-    virtual bool blackballOutputs(const std::vector<std::string> &outputs, bool add) override;
-    virtual bool blackballOutput(const std::string &amount, const std::string &offset) override;
-    virtual bool unblackballOutput(const std::string &amount, const std::string &offset) override;
     virtual bool getRing(const std::string &key_image, std::vector<uint64_t> &ring) const override;
     virtual bool getRings(const std::string &txid, std::vector<std::pair<std::string, std::vector<uint64_t>>> &rings) const override;
     virtual bool setRing(const std::string &key_image, const std::vector<uint64_t> &ring, bool relative) override;

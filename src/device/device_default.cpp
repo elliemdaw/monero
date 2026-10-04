@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024, The Monero Project
+// Copyright (c) 2017-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -30,6 +30,7 @@
 
 
 
+#include <boost/thread/lock_guard.hpp>
 #include "device_default.hpp"
 #include "int-util.h"
 #include "crypto/wallet/crypto.h"
@@ -82,19 +83,32 @@ namespace hw {
             return true;
         }
 
+        // serialize mode access so callers cannot observe another wallet's transient signing mode
         bool  device_default::set_mode(device_mode mode) {
+            boost::lock_guard<boost::recursive_mutex> lock(device_locker);
             return device::set_mode(mode);
+        }
+
+        device::device_mode device_default::get_mode() const {
+            boost::lock_guard<boost::recursive_mutex> lock(device_locker);
+            return device::get_mode();
         }
 
         /* ======================================================================= */
         /*  LOCKER                                                                 */
         /* ======================================================================= */ 
     
-        void device_default::lock() { }
+        void device_default::lock() {
+            device_locker.lock();
+        }
 
-        bool device_default::try_lock() { return true; }
+        bool device_default::try_lock() {
+            return device_locker.try_lock();
+        }
 
-        void device_default::unlock() { }
+        void device_default::unlock() {
+            device_locker.unlock();
+        }
 
         /* ======================================================================= */
         /*                             WALLET & ADDRESS                            */
@@ -103,7 +117,7 @@ namespace hw {
         bool  device_default::generate_chacha_key(const cryptonote::account_keys &keys, crypto::chacha_key &key, uint64_t kdf_rounds) {
             const crypto::secret_key &view_key = keys.m_view_secret_key;
             const crypto::secret_key &spend_key = keys.m_spend_secret_key;
-            epee::mlocked<tools::scrubbed_arr<char, sizeof(view_key) + sizeof(spend_key) + 1>> data;
+            epee::mlocked<tools::scrubbed<std::array<char, sizeof(view_key) + sizeof(spend_key) + 1>>> data;
             memcpy(data.data(), &view_key, sizeof(view_key));
             memcpy(data.data() + sizeof(view_key), &spend_key, sizeof(spend_key));
             data[sizeof(data) - 1] = config::HASH_KEY_WALLET;

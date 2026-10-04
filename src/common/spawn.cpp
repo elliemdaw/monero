@@ -1,5 +1,4 @@
 // Copyright (c) 2018-2024, The Monero Project
-
 // 
 // All rights reserved.
 // 
@@ -28,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <errno.h>
+#include <cstdlib>
 #include <unistd.h>
 #include <sys/types.h>
 #ifdef _WIN32
@@ -111,8 +111,7 @@ int spawn(const char *filename, const std::vector<std::string>& args, bool wait)
     close(0);
     char *envp[] = {NULL};
     execve(filename, argv.data(), envp);
-    MERROR("Failed to execve: " << strerror(errno));
-    return -1;
+    _exit(EXIT_FAILURE);
   }
 
   // parent

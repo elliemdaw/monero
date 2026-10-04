@@ -125,10 +125,10 @@ namespace tools
           {
             // we requested a range, so check if we're getting it, otherwise truncate
             bool got_range = false;
-            const std::string prefix = "bytes=" + std::to_string(offset) + "-";
             for (const auto &kv: headers.m_header_info.m_etc_fields)
             {
-              if (kv.first == "Content-Range" && strncmp(kv.second.c_str(), prefix.c_str(), prefix.size()))
+              if (!epee::string_tools::compare_no_case(kv.first, "Content-Range") &&
+                  tools::content_range_starts_at(kv.second, offset))
               {
                 got_range = true;
                 break;
@@ -273,20 +273,6 @@ namespace tools
     download_async_handle control = std::make_shared<download_thread_control>(path, url, result, progress);
     control->thread = boost::thread([control](){ download_thread(control); });
     return control;
-  }
-
-  bool download_finished(const download_async_handle &control)
-  {
-    CHECK_AND_ASSERT_MES(control != 0, false, "NULL async download handle");
-    boost::lock_guard<boost::mutex> lock(control->mutex);
-    return control->stopped;
-  }
-
-  bool download_error(const download_async_handle &control)
-  {
-    CHECK_AND_ASSERT_MES(control != 0, false, "NULL async download handle");
-    boost::lock_guard<boost::mutex> lock(control->mutex);
-    return !control->success;
   }
 
   bool download_wait(const download_async_handle &control)

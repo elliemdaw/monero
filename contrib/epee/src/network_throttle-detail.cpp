@@ -1,6 +1,6 @@
 /// @file
 /// @author rfree (current maintainer in monero.cc project)
-/// @brief implementaion for throttling of connection (count and rate-limit speed etc)
+/// @brief implementation for throttling of connection (count and rate-limit speed etc)
 
 // Copyright (c) 2014-2024, The Monero Project
 // 
@@ -33,19 +33,11 @@
 /* rfree: implementation for throttle details */
 
 #include <string>
-#include <vector>
-#include <atomic>
-
-#include <boost/asio.hpp>
-
-#include <memory>
 
 #include "syncobj.h"
 
-#include "net/net_utils_base.h" 
 #include "misc_log_ex.h" 
 #include <boost/chrono.hpp>
-#include "misc_language.h"
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
@@ -54,7 +46,6 @@
 
 #include <boost/asio/basic_socket.hpp>
 #include <boost/asio/ip/unicast.hpp>
-#include "net/abstract_tcp_server2.h"
 
 // TODO:
 #include "net/network_throttle-detail.hpp"
@@ -64,7 +55,7 @@
 
 // ################################################################################################
 // ################################################################################################
-// the "header part". Not separeted out for .hpp because point of this modification is 
+// the "header part". Not separated out for .hpp because point of this modification is
 // to rebuild just 1 translation unit while working on this code.
 // (But maybe common parts will be separated out later though - if needed)
 // ################################################################################################
@@ -266,7 +257,7 @@ void network_throttle::calculate_times(size_t packet_size, calculate_times_struc
 
 	if (!m_any_packet_yet) {
 		cts.window=0; cts.average=0; cts.delay=0; 
-		cts.recomendetDataSize = m_network_minimal_segment; // should be overrided by caller anyway
+		cts.recomendetDataSize = m_network_minimal_segment; // should be overridden by caller anyway
 		return ; // no packet yet, I can not decide about sleep time
 	}
 
@@ -288,7 +279,7 @@ void network_throttle::calculate_times(size_t packet_size, calculate_times_struc
 	const double D1 = (Epast - M*cts.window) / M; // delay - how long to sleep to get back to target speed
 	const double D2 = (Enow  - M*cts.window) / M; // delay - how long to sleep to get back to target speed (including current packet)
 
-    cts.delay = (D1*0.80 + D2*0.20); // finall sleep depends on both with/without current packet
+    cts.delay = (D1*0.80 + D2*0.20); // final sleep depends on both with/without current packet
 	//				update_overheat();
 	cts.average = Epast/cts.window; // current avg. speed (for info)
 
@@ -354,7 +345,7 @@ size_t network_throttle::get_recommended_size_of_planned_transport() const {
 
 double network_throttle::get_current_speed() const {
 	unsigned int bytes_transferred = 0;
-	if (m_history.size() == 0 || m_slot_size == 0)
+	if (m_history.size() <= 1 || m_slot_size == 0)
 		return 0;
 		
 	auto it = m_history.begin();

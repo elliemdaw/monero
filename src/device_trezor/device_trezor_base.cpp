@@ -29,6 +29,7 @@
 
 #include "device_trezor_base.hpp"
 #include "memwipe.h"
+#include <algorithm>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/predicate.hpp>
@@ -240,6 +241,12 @@ namespace trezor {
       if (!m_features->has_initialized() || !m_features->initialized()){
         throw exc::TrezorException("Device is not initialized");
       }
+
+      // Reject firmware that doesn't have the Monero feature/capability
+      const auto& capabilities = m_features->capabilities();
+      if (std::find(capabilities.begin(), capabilities.end(), messages::management::Features::Capability_Monero) == capabilities.end()){
+        throw exc::FirmwareNotSupportedException();
+      }
     }
 
     void device_trezor_base::call_ping_unsafe(){
@@ -370,7 +377,7 @@ namespace trezor {
     {
       require_connected();
       auto initMsg = std::make_shared<messages::management::Initialize>();
-      const auto data_cleaner = epee::misc_utils::create_scope_leave_handler([&]() {
+      const epee::scope_guard data_cleaner([&]() {
         if (initMsg->has_session_id())
           memwipe(&(*initMsg->mutable_session_id())[0], initMsg->mutable_session_id()->size());
       });
@@ -459,7 +466,7 @@ namespace trezor {
         m.set_allocated_pin(new std::string(pin->data(), pin->size()));
       }
 
-      const auto data_cleaner = epee::misc_utils::create_scope_leave_handler([&]() {
+      const epee::scope_guard data_cleaner([&]() {
         if (m.has_pin())
           memwipe(&(*m.mutable_pin())[0], m.mutable_pin()->size());
       });
@@ -470,7 +477,7 @@ namespace trezor {
     void device_trezor_base::on_passphrase_request(GenericMessage & resp, const messages::common::PassphraseRequest * msg)
     {
       CHECK_AND_ASSERT_THROW_MES(msg, "Empty message");
-      MDEBUG("on_passhprase_request");
+      MDEBUG("on_passphrase_request");
 
       m_seen_passphrase_entry_message = true;
       bool on_device = false;
@@ -503,7 +510,7 @@ namespace trezor {
         }
       }
 
-      const auto data_cleaner = epee::misc_utils::create_scope_leave_handler([&]() {
+      const epee::scope_guard data_cleaner([&]() {
         if (m.has_passphrase())
           memwipe(&(*m.mutable_passphrase())[0], m.mutable_passphrase()->size());
       });

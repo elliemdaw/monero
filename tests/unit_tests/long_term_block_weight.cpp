@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2024, The Monero Project
+// Copyright (c) 2019-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -51,6 +51,7 @@ private:
 public:
   TestDB() { m_open = true; }
 
+  using cryptonote::BaseTestDB::add_block;
   virtual void add_block( const cryptonote::block& blk
                         , size_t block_weight
                         , uint64_t long_term_block_weight
@@ -90,7 +91,7 @@ public:
       *block_height = h - 1;
     return top;
   }
-  virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { blocks.pop_back(); }
+  virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> *txs) override { blocks.pop_back(); }
 
 private:
   std::vector<block_t> blocks;
@@ -206,9 +207,8 @@ TEST(long_term_block_weight, multi_pop)
   }
 
   cryptonote::block b;
-  std::vector<cryptonote::transaction> txs;
   for (uint64_t h = 0; h < num_pop; ++h)
-    bc->get_db().pop_block(b, txs);
+    bc->get_db().pop_block(b, /*txs=*/nullptr);
   ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
 
   ASSERT_EQ(effective_median, bc->get_current_cumulative_block_weight_median());
@@ -267,8 +267,7 @@ TEST(long_term_block_weight, pop_invariant_max)
     for (int i = 0; i < remove; ++i)
     {
       cryptonote::block b;
-      std::vector<cryptonote::transaction> txs;
-      bc->get_db().pop_block(b, txs);
+      bc->get_db().pop_block(b, /*txs=*/nullptr);
       ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
     }
     for (int i = 0; i < add; ++i)
@@ -317,8 +316,7 @@ TEST(long_term_block_weight, pop_invariant_random)
     for (int i = 0; i < remove; ++i)
     {
       cryptonote::block b;
-      std::vector<cryptonote::transaction> txs;
-      bc->get_db().pop_block(b, txs);
+      bc->get_db().pop_block(b, /*txs=*/nullptr);
       ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
       const uint64_t effective_median = bc->get_current_cumulative_block_weight_median();
       const uint64_t effective_limit = bc->get_current_cumulative_block_weight_limit();

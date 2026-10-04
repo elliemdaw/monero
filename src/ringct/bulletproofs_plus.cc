@@ -547,7 +547,7 @@ namespace rct
         // This offset is applied to other group elements as well;
         //  it allows us to apply a multiply-by-8 operation in the verifier efficiently
         //  to ensure that the resulting group elements are in the prime-order point subgroup
-        //  and avoid much more constly multiply-by-group-order operations.
+        //  and avoid much more costly multiply-by-group-order operations.
         for (size_t i = 0; i < sv.size(); ++i)
         {
             rct::key gamma8, sv8;
@@ -827,6 +827,7 @@ try_again:
             CHECK_AND_ASSERT_MES(is_reduced(proof.d1), false, "Input scalar not in range");
 
             CHECK_AND_ASSERT_MES(proof.V.size() >= 1, false, "V does not have at least one element");
+            CHECK_AND_ASSERT_MES(proof.V.size() <= maxM, false, "V has too many elements");
             CHECK_AND_ASSERT_MES(proof.L.size() == proof.R.size(), false, "Mismatched L and R sizes");
             CHECK_AND_ASSERT_MES(proof.L.size() > 0, false, "Empty proof");
 
