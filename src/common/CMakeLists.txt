@@ -36,7 +36,6 @@ set(common_sources
   error.cpp
   expect.cpp
   util.cpp
-  i18n.cpp
   notify.cpp
   password.cpp
   perf_timer.cpp
@@ -61,22 +60,33 @@ monero_private_headers(common
 monero_add_library(common
   ${common_sources}
   ${common_headers}
-  ${common_private_headers}
-  DEPENDS generate_translations_header)
+  ${common_private_headers})
+
+if (STACK_TRACE_USE_WRAP)
+  target_compile_definitions(obj_common PRIVATE STACK_TRACE_USE_WRAP)
+endif()
+
 target_link_libraries(common
   PUBLIC
     cncrypto
-    ${UNBOUND_LIBRARIES}
+    unbound
     ${LIBUNWIND_LIBRARIES}
     ${Boost_DATE_TIME_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
     ${Boost_THREAD_LIBRARY}
     ${Boost_REGEX_LIBRARY}
-    ${Boost_CHRONO_LIBRARY}
   PRIVATE
     ${OPENSSL_LIBRARIES}
     ${EXTRA_LIBRARIES})
+
+if (STACK_TRACE_USE_WRAP)
+  set_property(TARGET common APPEND PROPERTY LINK_FLAGS
+    "-Wl,--wrap=__cxa_throw")
+  set_property(TARGET common APPEND PROPERTY INTERFACE_LINK_OPTIONS
+    "-Wl,--wrap=__cxa_throw"
+    "-Wl,-u,__wrap___cxa_throw")
+endif()
 target_include_directories(common
   PRIVATE
     ${Boost_INCLUDE_DIRS})

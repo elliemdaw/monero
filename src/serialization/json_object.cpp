@@ -146,7 +146,7 @@ void fromJsonValue(const rapidjson::Value& val, std::string& str)
     throw WRONG_TYPE("string");
   }
 
-  str = val.GetString();
+  str.assign(val.GetString(), val.GetStringLength());
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const std::vector<std::uint8_t>& src)
@@ -303,7 +303,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   }
 
   const auto& rsig = tx.rct_signatures;
-  if (!cryptonote::is_coinbase(tx) && rsig.p.bulletproofs.empty() && rsig.p.bulletproofs_plus.empty() && rsig.p.rangeSigs.empty() && rsig.p.MGs.empty() && rsig.get_pseudo_outs().empty() && sigs == val.MemberEnd())
+  if (!tx.is_coinbase() && rsig.p.bulletproofs.empty() && rsig.p.bulletproofs_plus.empty() && rsig.p.rangeSigs.empty() && rsig.p.MGs.empty() && rsig.get_pseudo_outs().empty() && sigs == val.MemberEnd())
     tx.pruned = true;
 }
 
@@ -1173,6 +1173,11 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   const auto prunable = val.FindMember("prunable");
   if (prunable != val.MemberEnd())
   {
+    if (!prunable->value.IsObject())
+    {
+      throw WRONG_TYPE("json object");
+    }
+
     rct::keyV pseudo_outs = std::move(sig.get_pseudo_outs());
 
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.rangeSigs, range_proofs);
@@ -1530,27 +1535,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::output_distribu
   GET_FROM_JSON_OBJECT(val, dist.amount, amount);
   GET_FROM_JSON_OBJECT(val, dist.data.start_height, start_height);
   GET_FROM_JSON_OBJECT(val, dist.data.base, base);
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_block_template_backlog_entry& entry)
-{
-  dest.StartObject();
-  INSERT_INTO_JSON_OBJECT(dest, id, entry.id);
-  INSERT_INTO_JSON_OBJECT(dest, weight, entry.weight);
-  INSERT_INTO_JSON_OBJECT(dest, fee, entry.fee);
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_block_template_backlog_entry& entry)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, entry.id, id);
-  GET_FROM_JSON_OBJECT(val, entry.weight, weight);
-  GET_FROM_JSON_OBJECT(val, entry.fee, fee);
 }
 
 }  // namespace json

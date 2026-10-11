@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 //
 // All rights reserved.
 //
@@ -87,7 +87,8 @@ namespace wallet_args
   }
 
   std::pair<boost::optional<boost::program_options::variables_map>, bool> main(
-    int argc, char** argv,
+    int argc,
+    const char* const argv[],
     const char* const usage,
     const char* const notice,
     boost::program_options::options_description desc_params,
@@ -111,7 +112,6 @@ namespace wallet_args
     const command_line::arg_descriptor<std::string> arg_config_file = {"config-file", wallet_args::tr("Config file"), "", true};
 
 
-    std::string lang = i18n_get_language();
     tools::on_startup();
 #ifdef NDEBUG
     tools::disable_core_dumps();
@@ -130,8 +130,6 @@ namespace wallet_args
     command_line::add_arg(desc_params, arg_max_log_files);
     command_line::add_arg(desc_params, arg_max_concurrency);
     command_line::add_arg(desc_params, arg_config_file);
-
-    i18n_set_language("translations", "monero", lang);
 
     po::options_description desc_all;
     desc_all.add(desc_general).add(desc_params);

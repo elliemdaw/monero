@@ -70,8 +70,8 @@ public:
   virtual bool get_tx_blob(const crypto::hash& h, cryptonote::blobdata &tx) const override { return false; }
   virtual bool get_pruned_tx_blob(const crypto::hash& h, cryptonote::blobdata &tx) const override { return false; }
   virtual bool get_pruned_tx_blobs_from(const crypto::hash& h, size_t count, std::vector<cryptonote::blobdata> &bd) const override { return false; }
-  virtual bool get_blocks_from(uint64_t start_height, size_t min_block_count, size_t max_block_count, size_t max_tx_count, size_t max_size, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata>>>>& blocks, bool pruned, bool get_miner_tx_hash) const override { return false; }
-  virtual std::vector<crypto::hash> get_txids_loose(const crypto::hash& h, std::uint32_t bits, uint64_t max_num_txs = 0) override { return {}; }
+  virtual bool get_blocks_from(uint64_t start_height, size_t min_block_count, size_t max_block_count, size_t max_tx_count, size_t max_size, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::tuple<crypto::hash, crypto::hash, cryptonote::blobdata>>>>& blocks, bool pruned, bool get_miner_tx_hash) const override { return false; }
+  virtual std::vector<crypto::hash> get_txids_loose(const crypto::hash& h, std::uint32_t bits, relay_category category, uint64_t max_num_txs = 0) override { return {}; }
   virtual bool get_prunable_tx_blob(const crypto::hash& h, cryptonote::blobdata &tx) const override { return false; }
   virtual bool get_prunable_tx_hash(const crypto::hash& tx_hash, crypto::hash &prunable_hash) const override { return false; }
   virtual uint64_t get_block_height(const crypto::hash& h) const override { return 0; }
@@ -121,6 +121,7 @@ public:
 
   virtual bool for_all_key_images(std::function<bool(const crypto::key_image&)>) const override { return true; }
   virtual bool for_blocks_range(const uint64_t&, const uint64_t&, std::function<bool(uint64_t, const crypto::hash&, const cryptonote::block&)>) const override { return true; }
+  virtual bool for_all_block_info(uint64_t, uint64_t, const std::function<bool(uint64_t, const crypto::hash&, uint64_t)> &f) const override { return true; }
   virtual bool for_all_transactions(std::function<bool(const crypto::hash&, const cryptonote::transaction&)>, bool pruned) const override { return true; }
   virtual bool for_all_outputs(std::function<bool(uint64_t amount, const crypto::hash &tx_hash, uint64_t height, size_t tx_idx)> f) const override { return true; }
   virtual bool for_all_outputs(uint64_t amount, const std::function<bool(uint64_t height)> &f) const override { return true; }
@@ -139,6 +140,13 @@ public:
   virtual cryptonote::blobdata get_txpool_tx_blob(const crypto::hash& txid, relay_category tx_category) const override { return ""; }
   virtual bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const cryptonote::txpool_tx_meta_t&, const cryptonote::blobdata_ref*)>, bool include_blob = false, relay_category category = relay_category::broadcasted) const override { return false; }
 
+  virtual uint64_t add_block( const std::pair<cryptonote::block, cryptonote::blobdata>& blk
+                        , size_t block_weight
+                        , uint64_t long_term_block_weight
+                        , const cryptonote::difficulty_type& cumulative_difficulty
+                        , const uint64_t& coins_generated
+                        , const std::vector<std::pair<cryptonote::transaction, cryptonote::blobdata>>& txs
+                        ) override { return cryptonote::BlockchainDB::add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, txs); }
   virtual void add_block( const cryptonote::block& blk
                         , size_t block_weight
                         , uint64_t long_term_block_weight

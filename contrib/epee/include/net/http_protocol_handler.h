@@ -36,6 +36,7 @@
 #include "net_utils_base.h"
 #include "http_auth.h"
 #include "http_base.h"
+#include "syncobj.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "net.http"
@@ -62,8 +63,20 @@ namespace net_utils
 			std::size_t m_max_public_ip_connections{3};
 			std::size_t m_max_private_ip_connections{25};
 			std::size_t m_max_connections{100};
+			bool m_disable_md5{false};
 			critical_section m_lock;
+
+			template<typename T>
+			static bool after_init_connection(const std::shared_ptr<T>& self)
+			{
+				if (!self)
+					return false;
+				return self->m_protocol_handler.after_init_connection();
+			}
 		};
+
+		// RPC limits groupable IPv6 clients by /64 to avoid per-address limit bypasses.
+		std::string get_rpc_connection_limit_key(const net_utils::network_address& address);
 
 		/************************************************************************/
 		/*                                                                      */
@@ -92,7 +105,9 @@ namespace net_utils
 			{
 				return true;
 			}
+
 			bool after_init_connection();
+
 			virtual bool handle_recv(const void* ptr, size_t cb);
 			virtual bool handle_request(const http::http_request_info& query_info, http_response_info& response);
 
@@ -119,9 +134,9 @@ namespace net_utils
 			bool analize_cached_request_header_and_invoke_state(size_t pos);
 
 			bool handle_invoke_query_line();
-			bool parse_cached_header(http_header_info& body_info, const std::string& m_cache_to_process, size_t pos);
+			bool parse_cached_header(http_header_info& body_info, const std::string& m_cache_to_process, size_t pos, size_t& content_length);
 			std::string::size_type match_end_of_header(const std::string& buf);
-			bool get_len_from_content_lenght(const std::string& str, size_t& len);
+			bool get_len_from_content_lenght(boost::string_view str, size_t& len);
 			bool handle_retriving_query_body();
 			bool handle_query_measure();
 			bool set_ready_state();
@@ -183,7 +198,7 @@ namespace net_utils
 			http_custom_handler(i_service_endpoint* psnd_hndlr, config_type& config, t_connection_context& conn_context)
 				: simple_http_connection_handler<t_connection_context>(psnd_hndlr, config, conn_context),
 					m_config(config),
-					m_auth(m_config.m_user ? http_server_auth{*m_config.m_user, config.rng} : http_server_auth{})
+					m_auth(m_config.m_user ? http_server_auth{*m_config.m_user, config.rng, m_config.m_disable_md5} : http_server_auth{})
 			{}
 			inline bool handle_request(const http_request_info& query_info, http_response_info& response)
 			{

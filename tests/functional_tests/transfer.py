@@ -29,6 +29,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import json
+import time
 import util_resources
 import pprint
 from deepdiff import DeepDiff
@@ -203,6 +204,13 @@ class TransferTest():
         assert e.address == '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm'
         assert e.double_spend_seen == False
         assert not 'confirmations' in e or e.confirmations == 0
+        assert e.change_amount > 0
+
+        res = self.wallet[0].get_transfer_by_txid(txid)
+        assert len(res.transfers) == 1
+        assert res.transfers[0] == res.transfer
+        assert res.transfer.type == 'pending'
+        assert res.transfer.change_amount == e.change_amount
 
         running_balances[0] -= fee
 
@@ -234,6 +242,7 @@ class TransferTest():
         assert e.address == '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm'
         assert e.double_spend_seen == False
         assert e.confirmations == 1
+        assert e.change_amount > 0
 
         res = self.wallet[0].get_height()
         wallet_height = res.height
@@ -255,6 +264,7 @@ class TransferTest():
         assert t.address == '42ey1afDFnn4886T7196doS9GPMzexD9gXpsZJDwVjeRVdFCSoHnv7KPbBeGpzJBzHRCAs9UxqeoyFQMYbqSWYTfJJQAWDm'
         assert t.double_spend_seen == False
         assert t.confirmations == 1
+        assert t.change_amount == e.change_amount
 
         res = self.wallet[0].get_balance()
         assert res.balance == running_balances[0]
@@ -684,6 +694,8 @@ class TransferTest():
         res = self.wallet[0].sweep_single('44Kbx4sJ7JDRDV5aAhLJzQCjDz2ViLRduE3ijDZu3osWKBjMGkV1XPk4pfDUMqt1Aiezvephdqm6YD19GKFD9ZcXVUTp6BW', key_image = ki)
         assert len(res.tx_hash) == 64
         tx_hash = res.tx_hash
+        # Avoid racing the txpool relay state update before checking spent status
+        time.sleep(0.1)
         res = daemon.is_key_image_spent([ki])
         assert len(res.spent_status) == 1
         assert res.spent_status[0] == 2

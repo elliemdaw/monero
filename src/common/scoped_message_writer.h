@@ -70,12 +70,8 @@ public:
 
   scoped_message_writer(scoped_message_writer&& rhs)
     : m_flush(std::move(rhs.m_flush))
-#if defined(_MSC_VER)
-    , m_oss(std::move(rhs.m_oss))
-#else
       // GCC bug: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54316
     , m_oss(rhs.m_oss.str(), std::ios_base::out | std::ios_base::ate)
-#endif
     , m_color(std::move(rhs.m_color))
     , m_log_level(std::move(rhs.m_log_level))
   {
@@ -99,17 +95,20 @@ public:
     {
       m_flush = false;
 
-      MCLOG_FILE(m_log_level, "msgwriter", m_oss.str());
+      std::string message = m_oss.str();
+      MCLOG_FILE(m_log_level, "msgwriter", message);
+      try { el::base::sanitize(message); }
+      catch (const std::exception&) { message = "<Invalid UTF-8 in message>"; }
 
       PAUSE_READLINE();
       if (epee::console_color_default == m_color)
       {
-        std::cout << m_oss.str();
+        std::cout << message;
       }
       else
       {
         set_console_color(m_color, m_bright);
-        std::cout << m_oss.str();
+        std::cout << message;
         epee::reset_console_color();
       }
       std::cout << std::endl;

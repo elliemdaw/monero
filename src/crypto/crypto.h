@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -31,60 +31,61 @@
 #pragma once
 
 #include <cstddef>
-#include <iostream>
-#include <boost/optional.hpp>
+#include <iosfwd>
 #include <type_traits>
-#include <vector>
-#include <random>
 
-#include "common/pod-class.h"
 #include "memwipe.h"
 #include "mlocker.h"
 #include "generic-ops.h"
-#include "hex.h"
-#include "span.h"
 #include "hash.h"
+
+//forward declarations
+namespace boost
+{
+template <typename T> class optional;
+}
 
 namespace crypto {
 
-  extern "C" {
-#include "random.h"
-  }
-
 #pragma pack(push, 1)
-  POD_CLASS ec_point {
+  struct ec_point {
     char data[32];
   };
 
-  POD_CLASS ec_scalar {
+  struct ec_scalar {
     char data[32];
   };
 
-  POD_CLASS public_key: ec_point {
+  // x or y coordinate
+  struct ec_coord {
+    char data[32];
+  };
+
+  struct public_key: ec_point {
     friend class crypto_ops;
   };
 
-  POD_CLASS public_key_memsafe : epee::mlocked<tools::scrubbed<public_key>> {
+  struct public_key_memsafe : epee::mlocked<tools::scrubbed<public_key>> {
     public_key_memsafe() = default;
     public_key_memsafe(const public_key &original) { memcpy(this->data, original.data, 32); }
   };
 
   using secret_key = epee::mlocked<tools::scrubbed<ec_scalar>>;
 
-  POD_CLASS key_derivation: ec_point {
+  struct key_derivation: ec_point {
     friend class crypto_ops;
   };
 
-  POD_CLASS key_image: ec_point {
+  struct key_image: ec_point {
     friend class crypto_ops;
   };
 
-  POD_CLASS signature {
+  struct signature {
     ec_scalar c, r;
     friend class crypto_ops;
   };
 
-  POD_CLASS view_tag {
+  struct view_tag {
     char data;
   };
 #pragma pack(pop)
@@ -96,6 +97,8 @@ namespace crypto {
     sizeof(public_key) == 32 && sizeof(public_key_memsafe) == 32 && sizeof(secret_key) == 32 &&
     sizeof(key_derivation) == 32 && sizeof(key_image) == 32 &&
     sizeof(signature) == 64 && sizeof(view_tag) == 1, "Invalid structure size");
+
+  static const ec_point EC_I = {1};
 
   class crypto_ops {
     crypto_ops();
@@ -129,6 +132,10 @@ namespace crypto {
     friend void generate_tx_proof_v1(const hash &, const public_key &, const public_key &, const boost::optional<public_key> &, const public_key &, const secret_key &, signature &);
     static bool check_tx_proof(const hash &, const public_key &, const public_key &, const boost::optional<public_key> &, const public_key &, const signature &, const int);
     friend bool check_tx_proof(const hash &, const public_key &, const public_key &, const boost::optional<public_key> &, const public_key &, const signature &, const int);
+    static void unbiased_hash_to_ec(const unsigned char *, const std::size_t, ec_point &);
+    friend void unbiased_hash_to_ec(const unsigned char *, const std::size_t, ec_point &);
+    static void derive_key_image_generator(const public_key &, const bool biased, ec_point &);
+    friend void derive_key_image_generator(const public_key &, const bool biased, ec_point &);
     static void generate_key_image(const public_key &, const secret_key &, key_image &);
     friend void generate_key_image(const public_key &, const secret_key &, key_image &);
     static void generate_ring_signature(const hash &, const key_image &,
@@ -176,11 +183,7 @@ namespace crypto {
   /* Generate a random value between range_min and range_max
    */
   template<typename T>
-  typename std::enable_if<std::is_integral<T>::value, T>::type rand_range(T range_min, T range_max) {
-    crypto::random_device rd;
-    std::uniform_int_distribution<T> dis(range_min, range_max);
-    return dis(rd);
-  }
+  typename std::enable_if<std::is_integral<T>::value, T>::type rand_range(T range_min, T range_max);
 
   /* Generate a random index between 0 and sz-1
    */
@@ -200,6 +203,10 @@ namespace crypto {
   inline bool check_key(const public_key &key) {
     return crypto_ops::check_key(key);
   }
+
+  bool get_valid_torsion_cleared_point_vartime(const ec_point &point, ec_point &torsion_cleared_out);
+  // Return a canonical key in the prime-order subgroup, or identity on decode failure.
+  public_key pubkey_clear_torsion(const public_key &pubkey);
 
   /* Checks a private key and computes the corresponding public key.
    */
@@ -254,6 +261,10 @@ namespace crypto {
     return crypto_ops::check_tx_proof(prefix_hash, R, A, B, D, sig, version);
   }
 
+  inline void derive_key_image_generator(const public_key &pub, const bool biased, ec_point &ki_gen) {
+    crypto_ops::derive_key_image_generator(pub, biased, ki_gen);
+  }
+
   /* To send money to a key:
    * * The sender generates an ephemeral key and includes it in transaction output.
    * * To spend the money, the receiver generates a key image from it.
@@ -275,20 +286,6 @@ namespace crypto {
     return crypto_ops::check_ring_signature(prefix_hash, image, pubs, pubs_count, sig);
   }
 
-  /* Variants with vector<const public_key *> parameters.
-   */
-  inline void generate_ring_signature(const hash &prefix_hash, const key_image &image,
-    const std::vector<const public_key *> &pubs,
-    const secret_key &sec, std::size_t sec_index,
-    signature *sig) {
-    generate_ring_signature(prefix_hash, image, pubs.data(), pubs.size(), sec, sec_index, sig);
-  }
-  inline bool check_ring_signature(const hash &prefix_hash, const key_image &image,
-    const std::vector<const public_key *> &pubs,
-    const signature *sig) {
-    return check_ring_signature(prefix_hash, image, pubs.data(), pubs.size(), sig);
-  }
-
   /* Derive a 1-byte view tag from the sender-receiver shared secret to reduce scanning time.
    * When scanning outputs that were not sent to the user, checking the view tag for a match removes the need to proceed with expensive EC operations
    * for an expected 99.6% of outputs (expected false positive rate = 1/2^8 = 1/256 = 0.4% = 100% - 99.6%).
@@ -297,30 +294,23 @@ namespace crypto {
     crypto_ops::derive_view_tag(derivation, output_index, vt);
   }
 
-  inline std::ostream &operator <<(std::ostream &o, const crypto::public_key &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
+  inline void unbiased_hash_to_ec(const unsigned char *preimage, const std::size_t length, ec_point &res) {
+    crypto_ops::unbiased_hash_to_ec(preimage, length, res);
   }
+
+  std::ostream &operator <<(std::ostream &o, const crypto::public_key &v);
   /* Do NOT overload the << operator for crypto::secret_key here. Use secret_key_explicit_print_ref
    * instead to prevent accidental implicit dumping of secret key material to the logs (which has
    * happened before). For the same reason, do not overload it for crypto::ec_scalar either since
    * crypto::secret_key is a subclass. I'm not sorry that it's obtuse; that's the point, bozo.
    */
   struct secret_key_explicit_print_ref { const crypto::secret_key &sk; };
-  inline std::ostream &operator <<(std::ostream &o, const secret_key_explicit_print_ref v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(unwrap(unwrap(v.sk)))); return o;
-  }
-  inline std::ostream &operator <<(std::ostream &o, const crypto::key_derivation &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
-  }
-  inline std::ostream &operator <<(std::ostream &o, const crypto::key_image &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
-  }
-  inline std::ostream &operator <<(std::ostream &o, const crypto::signature &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
-  }
-  inline std::ostream &operator <<(std::ostream &o, const crypto::view_tag &v) {
-    epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
-  }
+  std::ostream &operator <<(std::ostream &o, const secret_key_explicit_print_ref v);
+  std::ostream &operator <<(std::ostream &o, const crypto::key_derivation &v);
+  std::ostream &operator <<(std::ostream &o, const crypto::key_image &v);
+  std::ostream &operator <<(std::ostream &o, const crypto::signature &v);
+  std::ostream &operator <<(std::ostream &o, const crypto::view_tag &v);
+  std::ostream &operator <<(std::ostream &o, const crypto::ec_point &v);
 
   const extern crypto::public_key null_pkey;
   const extern crypto::secret_key null_skey;
@@ -336,7 +326,10 @@ inline unsigned char* to_bytes(crypto::ec_scalar &scalar) { return &reinterpret_
 inline const unsigned char* to_bytes(const crypto::ec_scalar &scalar) { return &reinterpret_cast<const unsigned char&>(scalar); }
 inline unsigned char* to_bytes(crypto::ec_point &point) { return &reinterpret_cast<unsigned char&>(point); }
 inline const unsigned char* to_bytes(const crypto::ec_point &point) { return &reinterpret_cast<const unsigned char&>(point); }
+inline unsigned char* to_bytes(crypto::ec_coord &coord) { return &reinterpret_cast<unsigned char&>(coord); }
+inline const unsigned char* to_bytes(const crypto::ec_coord &coord) { return &reinterpret_cast<const unsigned char&>(coord); }
 
+CRYPTO_MAKE_HASHABLE(ec_point)
 CRYPTO_MAKE_HASHABLE(public_key)
 CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(secret_key)
 CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(public_key_memsafe)

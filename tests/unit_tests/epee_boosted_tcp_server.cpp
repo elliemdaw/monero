@@ -32,7 +32,6 @@
 #include <boost/chrono/chrono.hpp>
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
-#include <condition_variable>
 #include <mutex>
 #include <thread>
 
@@ -56,6 +55,11 @@ namespace
 
   struct test_protocol_handler_config
   {
+    template<typename T>
+    static constexpr bool after_init_connection(const std::shared_ptr<T>&) noexcept
+    {
+      return true;
+    }
   };
 
   struct test_protocol_handler
@@ -64,10 +68,6 @@ namespace
     typedef test_protocol_handler_config config_type;
 
     test_protocol_handler(epee::net_utils::i_service_endpoint* /*psnd_hndlr*/, config_type& /*config*/, connection_context& /*conn_context*/)
-    {
-    }
-
-    void after_init_connection()
     {
     }
 
@@ -108,7 +108,7 @@ TEST(boosted_tcp_server, worker_threads_are_exception_resistant)
     }
   };
 
-  // 2 theads, but 4 exceptions
+  // 2 threads, but 4 exceptions
   ASSERT_TRUE(srv.run_server(2, false));
   ASSERT_TRUE(srv.async_call([&counter_incrementer]() { counter_incrementer(); throw std::runtime_error("test 1"); }));
   ASSERT_TRUE(srv.async_call([&counter_incrementer]() { counter_incrementer(); throw std::string("test 2"); }));
@@ -171,7 +171,7 @@ TEST(test_epee_connection, test_lifetime)
 
   using handler_t = epee::levin::async_protocol_handler<context_t>;
   using connection_t = epee::net_utils::connection<handler_t>;
-  using connection_ptr = boost::shared_ptr<connection_t>;
+  using connection_ptr = std::shared_ptr<connection_t>;
   using shared_state_t = typename connection_t::shared_state;
   using shared_state_ptr = std::shared_ptr<shared_state_t>;
   using shared_states_t = std::vector<shared_state_ptr>;
@@ -185,7 +185,7 @@ TEST(test_epee_connection, test_lifetime)
   using server_t = epee::net_utils::boosted_tcp_server<handler_t>;
   using lock_t = std::mutex;
   using lock_guard_t = std::lock_guard<lock_t>;
-  using connection_weak_ptr = boost::weak_ptr<connection_t>;
+  using connection_weak_ptr = std::weak_ptr<connection_t>;
   struct shared_conn_t {
     lock_t lock;
     connection_weak_ptr conn;
@@ -217,7 +217,7 @@ TEST(test_epee_connection, test_lifetime)
 
   boost::asio::post(io_context, [&io_context, &work, &endpoint, &server]{
     shared_state_ptr shared_state;
-    auto scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&work, &shared_state]{
+    const epee::scope_guard scope_exit_handler([&work, &shared_state]{
       work.reset();
       if (shared_state)
         shared_state->set_handler(nullptr, nullptr);
@@ -226,10 +226,20 @@ TEST(test_epee_connection, test_lifetime)
     shared_state = std::make_shared<shared_state_t>();
     shared_state->set_handler(new command_handler_t, &command_handler_t::destroy);
 
+    const auto wait_for = [](const auto& condition) {
+      const auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+      while (std::chrono::steady_clock::now() < timeout) {
+        if (condition())
+          return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+      }
+      return condition();
+    };
+
     auto create_connection = [&io_context, &endpoint, &shared_state] {
         connection_ptr conn(new connection_t(io_context, shared_state, {}, {}));
         conn->socket().connect(endpoint);
-        conn->start({}, {});
+        EXPECT_TRUE(conn->start({}, {}));
         context_t context;
         conn->get_context(context);
         auto tag = context.m_connection_id;
@@ -349,14 +359,21 @@ TEST(test_epee_connection, test_lifetime)
     for (auto i = 0; i < N * N * N; ++i) {
       {
         connection_ptr conn(new connection_t(io_context, shared_state, {}, {}));
-        conn->socket().connect(endpoint);
+        boost::system::error_code connect_error;
+        conn->socket().connect(endpoint, connect_error);
+        ASSERT_FALSE(connect_error);
         conn->start({}, {});
         lock_guard_t guard(shared_conn->lock);
         shared_conn->conn = conn;
       }
       ASSERT_TRUE(shared_state->get_connections_count() == 1);
       shared_state->del_out_connections(1);
-      while (shared_state->sock_count);
+      const auto cleanup_finished = wait_for([&] {
+        return shared_state->sock_count == 0
+          && server.get_connections_count() == 0
+          && server.get_config_shared()->get_in_connections_count() == 0;
+      });
+      ASSERT_TRUE(cleanup_finished);
       ASSERT_TRUE(shared_state->get_connections_count() == 0);
     }
 
@@ -587,166 +604,66 @@ TEST(test_epee_connection, ssl_handshake)
     workers.back().join();
 }
 
-
-TEST(boosted_tcp_server, strand_deadlock)
+namespace
 {
-  using context_t = epee::net_utils::connection_context_base;
-  using lock_t = std::mutex;
-  using unique_lock_t = std::unique_lock<lock_t>;
-
-  struct config_t {
-    using condition_t = std::condition_variable_any;
-    using lock_guard_t = std::lock_guard<lock_t>;
-    void notify_success()
-    {
-      lock_guard_t guard(lock);
-      success = true;
-      condition.notify_all();
-    }
-    lock_t lock;
-    condition_t condition;
-    bool success;
-  };
-
-  struct handler_t {
-    using config_type = config_t;
-    using connection_context = context_t;
-    using byte_slice_t = epee::byte_slice;
-    using socket_t = epee::net_utils::i_service_endpoint;
-
-    handler_t(socket_t *socket, config_t &config, context_t &context):
-      socket(socket),
-      config(config),
-      context(context)
-    {}
-    void after_init_connection()
-    {
-      unique_lock_t guard(lock);
-      if (!context.m_is_income) {
-        guard.unlock();
-        socket->do_send(byte_slice_t{"."});
-      }
-    }
-    void handle_qued_callback()
-    {
-    }
-    bool handle_recv(const char *data, size_t bytes_transferred)
-    {
-      unique_lock_t guard(lock);
-      if (!context.m_is_income) {
-        if (context.m_recv_cnt == 1024) {
-          guard.unlock();
-          socket->do_send(byte_slice_t{"."});
-        }
-      }
-      else {
-        if (context.m_recv_cnt == 1) {
-          for(size_t i = 0; i < 1024; ++i) {
-            guard.unlock();
-            socket->do_send(byte_slice_t{"."});
-            guard.lock();
-          }
-        }
-        else if(context.m_recv_cnt == 2) {
-          guard.unlock();
-          socket->close(false);
-        }
-      }
-      return true;
-    }
-    void release_protocol()
-    {
-      unique_lock_t guard(lock);
-      if(!context.m_is_income
-        && context.m_recv_cnt == 1024
-        && context.m_send_cnt == 2
-      ) {
-        guard.unlock();
-        config.notify_success();
-      }
-    }
-
-    lock_t lock;
-    socket_t *socket;
-    config_t &config;
-    context_t &context;
-  };
-
-  using server_t = epee::net_utils::boosted_tcp_server<handler_t>;
-  using endpoint_t = boost::asio::ip::tcp::endpoint;
-
-  endpoint_t endpoint(boost::asio::ip::make_address("127.0.0.1"), 5262);
-  server_t server(epee::net_utils::e_connection_type_P2P);
-  server.init_server(
-    endpoint.port(),
-    endpoint.address().to_string(),
-    {},
-    {},
-    {},
-    true,
-    epee::net_utils::ssl_support_t::e_ssl_support_disabled
-  );
-  server.run_server(2, {});
-  server.async_call(
-    [&]{
-      context_t context;
-      ASSERT_TRUE(
-        server.connect(
-          endpoint.address().to_string(),
-          std::to_string(endpoint.port()),
-          5,
-          context,
-          "0.0.0.0",
-          epee::net_utils::ssl_support_t::e_ssl_support_disabled
-        )
-      );
-    }
-  );
-  {
-    unique_lock_t guard(server.get_config_object().lock);
-    EXPECT_TRUE(
-      server.get_config_object().condition.wait_for(
-        guard,
-        std::chrono::seconds(5),
-        [&] { return server.get_config_object().success; }
-      )
-    );
-  }
-
-  server.send_stop_signal();
-  server.timed_wait_server_stop(5 * 1000);
-  server.deinit_server();
-}
-
-TEST(boosted_tcp_server, shutdown)
-{
-  struct context_t: epee::net_utils::connection_context_base {
+  struct shutdown_handler_t;
+  struct shutdown_context_t: epee::net_utils::connection_context_base {
     static constexpr size_t get_max_bytes(int) noexcept { return -1; }
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
   };
+}
 
-  struct config_t : epee::levin::async_protocol_handler_config<context_t> {
+namespace epee { namespace levin
+{
+  template<>
+  struct get_handler<shutdown_context_t> {
+    using type = shutdown_handler_t;
+  };
+}}
+
+namespace
+{
+  struct shutdown_config_t : epee::levin::async_protocol_handler_config<shutdown_context_t> {
     void received_handshake() { handshake_received.raise(); }
     epee::simple_event handshake_received;
   };
 
-  struct handler_t : epee::levin::async_protocol_handler<context_t> {
-    using config_type = config_t;
-    using connection_context = context_t;
-    using epee::levin::async_protocol_handler<context_t>::async_protocol_handler;
+  struct shutdown_command_handler_t: epee::levin::levin_commands_handler<shutdown_context_t> {
+    using context_t = shutdown_context_t;
+    virtual int invoke(int, const epee::span<const uint8_t>, epee::byte_stream&, context_t&) override { return {}; }
+    virtual int notify(int, const epee::span<const uint8_t>, context_t&) override { return {}; }
+    virtual void callback(context_t&) override {}
+    virtual void on_connection_new(context_t&) override {}
+    virtual void on_connection_close(context_t&) override { }
+    virtual ~shutdown_command_handler_t() override {}
+    static void destroy(epee::levin::levin_commands_handler<context_t>* ptr) { delete ptr; }
+  };
 
-    bool handle_recv(const void *data, size_t bytes_transferred)
+  struct shutdown_handler_t : epee::levin::async_protocol_handler<shutdown_context_t> {
+    using config_type = shutdown_config_t;
+    using connection_context = shutdown_context_t;
+    using epee::levin::async_protocol_handler<connection_context>::async_protocol_handler;
+
+    bool handle_recv(const void *data, size_t bytes_transferred) override
     {
       // We don't respond to the handshake (the async_invoke_remote_command2 is waiting for a response)
       MINFO("handle_recv just came in");
-      config_t* config = dynamic_cast<config_t*>(&m_config);
+      config_type* config = dynamic_cast<config_type*>(&m_config);
       if (config == nullptr)
         throw std::runtime_error("m_config must be of type config_t");
       config->received_handshake();
       return true;
     }
   };
+}
+
+
+TEST(boosted_tcp_server, shutdown)
+{
+  using context_t = shutdown_context_t;
+  using command_handler_t = shutdown_command_handler_t;
+  using handler_t = shutdown_handler_t;
 
   boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::make_address("127.0.0.1"), 5262);
   epee::net_utils::boosted_tcp_server<handler_t> server(epee::net_utils::e_connection_type_P2P);
@@ -759,6 +676,7 @@ TEST(boosted_tcp_server, shutdown)
     true,
     epee::net_utils::ssl_support_t::e_ssl_support_disabled
   );
+  server.get_config_shared()->set_handler(new command_handler_t, &command_handler_t::destroy);
 
   // Run the server in a thread and wait for it to start
   MINFO("Starting the server");
@@ -805,16 +723,236 @@ TEST(boosted_tcp_server, shutdown)
     server.get_config_object().handshake_received.wait();
   }
 
-  // Now stop the server, providing the callback necessary to wait for all connections to shutdown
-  const auto close_all_connections = [&]()
-  {
-    server.get_config_object().close(context.m_connection_id, true/*wait_for_shutdown*/);
-  };
-
   MINFO("Stopping the server");
-  server.send_stop_signal(close_all_connections);
+  server.mark_stop_signal_sent();
+  server.close_server_connections();
+  server.get_config_object().close(context.m_connection_id, true/*wait_for_shutdown*/);
+  server.stop_io_context();
   running_server.join();
 
   MINFO("Waiting for handshake to cancel");
   ev.wait();
+}
+
+namespace
+{
+  class send_queue_test : public testing::TestWithParam<epee::net_utils::t_connection_type>
+  {
+    struct config_t {
+      static constexpr bool after_init_connection(const std::shared_ptr<epee::net_utils::connection_basic>&) noexcept
+      {
+        return true;
+      }
+    };
+
+    struct handler_t {
+      using config_type = config_t;
+      using connection_context = epee::net_utils::connection_context_base;
+
+      handler_t(epee::net_utils::i_service_endpoint*, config_t&, connection_context&)
+      {}
+      void handle_qued_callback()
+      {}
+      bool handle_recv(const char*, size_t)
+      {
+        ADD_FAILURE() << "Unexpected input";
+        return false;
+      }
+      void release_protocol()
+      {}
+    };
+
+  protected:
+    using connection_t = epee::net_utils::connection<handler_t>;
+    using tcp_t = boost::asio::ip::tcp;
+    using byte_slice_t = epee::byte_slice;
+
+    boost::asio::io_context context;
+    tcp_t::socket peer{context};
+    std::shared_ptr<connection_t::shared_state> shared = std::make_shared<connection_t::shared_state>();
+    std::shared_ptr<connection_t> connection;
+
+    void SetUp() override
+    {
+      tcp_t::acceptor acceptor{context, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+      acceptor.async_accept(peer, [](auto error) { EXPECT_FALSE(error); });
+      tcp_t::socket socket{context};
+      socket.async_connect(acceptor.local_endpoint(), [](auto error) { EXPECT_FALSE(error); });
+      ASSERT_EQ(2u, context.run());
+      connection = std::make_shared<connection_t>(
+        context, std::move(socket), shared, GetParam(),
+        epee::net_utils::ssl_support_t::e_ssl_support_disabled
+      );
+      ASSERT_TRUE(connection->start(false, true));
+      // Leave the io_context stopped so queued writes cannot drain. This makes
+      // queue boundaries independent of socket buffers and worker scheduling.
+    }
+
+    bool send(byte_slice_t message)
+    {
+      return static_cast<epee::net_utils::i_service_endpoint&>(*connection).do_send(std::move(message));
+    }
+
+    void expect_failure(byte_slice_t message)
+    {
+      const auto start = std::chrono::steady_clock::now();
+      EXPECT_FALSE(send(std::move(message)));
+      EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+      context.restart();
+      EXPECT_LE(1u, context.run_for(std::chrono::seconds(5)));
+      EXPECT_TRUE(context.stopped());
+      EXPECT_EQ(connection_t::WASTED, connection->get_status());
+      EXPECT_FALSE(send(byte_slice_t{"."}));
+    }
+
+    void TearDown() override
+    {
+      if (connection)
+        connection->cancel();
+      context.restart();
+      context.run();
+    }
+  };
+}
+
+TEST_P(send_queue_test, count_limit)
+{
+  const byte_slice_t payload{"."};
+  for (std::size_t i = 0; i <= ABSTRACT_SERVER_SEND_QUE_MAX_COUNT; ++i)
+    ASSERT_TRUE(send(payload.clone()));
+  expect_failure(payload.clone());
+}
+
+TEST_P(send_queue_test, byte_limit)
+{
+  shared->response_soft_limit = 1024;
+  ASSERT_TRUE(send(byte_slice_t{std::string(shared->response_soft_limit, '.')}));
+  ASSERT_TRUE(send(byte_slice_t{"."}));
+  expect_failure(byte_slice_t{"."});
+}
+
+TEST_P(send_queue_test, large_message)
+{
+  const byte_slice_t small{"."};
+  const byte_slice_t large{std::string(std::size_t(3 * 128 * 1024), '.')};
+  for (std::size_t i = 0; i < ABSTRACT_SERVER_SEND_QUE_MAX_COUNT; ++i)
+    ASSERT_TRUE(send(small.clone()));
+  if (GetParam() == epee::net_utils::e_connection_type_RPC)
+  {
+    // RPC responses remain one queue entry, regardless of their size.
+    ASSERT_TRUE(send(large.clone()));
+    expect_failure(small.clone());
+  }
+  else
+    expect_failure(large.clone()); // Chunking crosses the count limit mid-send.
+}
+
+INSTANTIATE_TEST_SUITE_P(boosted_tcp_server, send_queue_test, testing::Values(
+  epee::net_utils::e_connection_type_P2P,
+  epee::net_utils::e_connection_type_RPC,
+  epee::net_utils::e_connection_type_NET
+));
+
+
+TEST(boosted_tcp_server, slow_reader_is_not_dropped_mid_response)
+{
+  using context_t = epee::net_utils::connection_context_base;
+
+  struct config_t {
+    static constexpr bool after_init_connection(const std::shared_ptr<epee::net_utils::connection_basic>&) noexcept
+    {
+      return true;
+    }
+  };
+
+  struct handler_t {
+    using config_type = config_t;
+    using connection_context = context_t;
+    using socket_t = epee::net_utils::i_service_endpoint;
+
+    handler_t(socket_t *socket, config_t &config, context_t &):
+      config(config)
+    {}
+    void after_init_connection()
+    {}
+
+    void handle_qued_callback()
+    {}
+
+    bool handle_recv(const char *data, size_t bytes_transferred)
+    {
+      return true;
+    }
+
+    void release_protocol()
+    {}
+
+    config_t &config;
+  };
+
+  using byte_slice_t = epee::byte_slice;
+  using connection_t = epee::net_utils::connection<handler_t>;
+  using shared_t = connection_t::shared_state;
+  using tcp_t = boost::asio::ip::tcp;
+  using endpoint_t = tcp_t::endpoint;
+  using socket_t = tcp_t::socket;
+  using acceptor_t = tcp_t::acceptor;
+
+  const endpoint_t endpoint{boost::asio::ip::make_address("127.0.0.1"), 5263};
+  boost::asio::io_context context{};
+  acceptor_t acceptor{context};
+  acceptor.open(endpoint.protocol());
+#if !defined(_WIN32)
+  acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
+#endif
+  acceptor.bind(endpoint);
+  acceptor.listen();
+
+  socket_t in_socket{context};
+  acceptor.async_accept(in_socket, [] (auto error) { EXPECT_TRUE(!error); });
+
+  socket_t out_socket{context};
+  out_socket.async_connect(endpoint, [] (auto error) { EXPECT_TRUE(!error); });
+
+  context.restart();
+  ASSERT_EQ(2u, context.run()); // connect and accept
+
+  // Keep the peer's receive window small so the payload cannot simply drain
+  // into kernel buffers while the peer reads nothing.
+  boost::system::error_code ec;
+  in_socket.set_option(boost::asio::socket_base::receive_buffer_size(4 * 1024), ec);
+
+  const auto shared = std::make_shared<shared_t>();
+  const auto out_connection = std::make_shared<connection_t>(
+    context,
+    std::move(out_socket),
+    shared,
+    epee::net_utils::e_connection_type_RPC,
+    epee::net_utils::ssl_support_t::e_ssl_support_disabled
+  );
+
+  // A loopback peer is granted NEW_CONNECTION_TIMEOUT_LOCAL, which is too long
+  // to exercise this. Declare a public address so the remote timeouts apply.
+  uint32_t ip = 0;
+  ASSERT_TRUE(epee::string_tools::get_ip_int32_from_string(ip, "8.8.8.8"));
+  ASSERT_TRUE(out_connection->start(false, true,
+    epee::net_utils::ipv4_network_address{ip, endpoint.port()}
+  ));
+
+  // RPC messages are queued unchunked, so this is a single async_write that
+  // cannot complete until the peer reads. The connection timer has to cover
+  // the write itself, not just the gap after it completes.
+  const byte_slice_t payload{std::string(std::size_t(8 * 1024 * 1024), '.')};
+  {
+    epee::net_utils::i_service_endpoint& out{*out_connection};
+    EXPECT_TRUE(out.do_send(payload.clone()));
+  }
+
+  // Run past NEW_CONNECTION_TIMEOUT_REMOTE (10s) without reading a byte.
+  context.restart();
+  context.run_for(std::chrono::seconds{12});
+
+  EXPECT_NE(connection_t::WASTED, out_connection->get_status());
+
+  context.stop();
 }

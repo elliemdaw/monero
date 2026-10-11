@@ -136,17 +136,9 @@ namespace tools
   std::string get_special_folder_path(int nfolder, bool iscreate);
 #endif
 
-  /*! \brief Returns the OS version string
-   *
-   * \details This is a wrapper around the primitives
-   * get_windows_version_display_string() and
-   * get_nix_version_display_string()
-   */
-  std::string get_os_version_string();
-
   /*! \brief creates directories for a path
    *
-   *  wrapper around boost::filesyste::create_directories.  
+   *  wrapper around boost::filesystem::create_directories.  
    *  (ensure-directory-exists): greenspun's tenth rule in action!
    */
   bool create_directories_if_necessary(const std::string& path);
@@ -214,7 +206,7 @@ namespace tools
     }
 #endif
 
-    /*! \brief calles m_handler */
+    /*! \brief calls m_handler */
     static void handle_signal(int type)
     {
       static boost::mutex m_mutex;
@@ -274,6 +266,11 @@ namespace tools
   std::string get_human_readable_timestamp(uint64_t ts);
 
   std::string get_human_readable_timespan(uint64_t seconds);
+
+  inline std::string get_human_readable_timespan(std::chrono::seconds seconds)
+  {
+    return get_human_readable_timespan(static_cast<uint64_t>(seconds.count()));
+  }
 
   std::string get_human_readable_bytes(uint64_t bytes);
 

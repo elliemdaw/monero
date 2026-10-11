@@ -42,6 +42,12 @@
 #include "transport.hpp"
 #include "messages/messages-common.pb.h"
 
+// https://github.com/Tencent/rapidjson/issues/1448
+#ifdef _WIN32
+#undef GetObject
+#endif
+#include <rapidjson/document.h>
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "device.trezor.transport"
 
@@ -155,6 +161,7 @@ namespace trezor{
 
 #define PROTO_MAGIC_SIZE 3
 #define PROTO_HEADER_SIZE 6
+#define PROTO_MAX_MESSAGE_SIZE (16 * 1024 * 1024) // Trezor protocol-v1 MESSAGE_MAX_LENGTH
 
   static size_t message_size(const google::protobuf::Message &req){
 #if GOOGLE_PROTOBUF_VERSION < 3006001
@@ -260,6 +267,9 @@ namespace trezor{
     uint32_t len;
     nread -= PROTO_MAGIC_SIZE + PROTO_HEADER_SIZE;
     deserialize_message_header(chunk_buff_raw + PROTO_MAGIC_SIZE, tag, len);
+    if (len > PROTO_MAX_MESSAGE_SIZE){
+      throw exc::CommunicationException("Message too large");
+    }
 
     epee::wipeable_string data_acc(chunk_buff_raw + PROTO_MAGIC_SIZE + PROTO_HEADER_SIZE, nread);
     data_acc.reserve(len);
@@ -409,7 +419,7 @@ namespace trezor{
     }
 
     if (!m_device_path){
-      throw exc::CommunicationException("Coud not open, empty device path");
+      throw exc::CommunicationException("Could not open, empty device path");
     }
 
     std::string uri = "/acquire/" + m_device_path.get() + "/null";
@@ -475,14 +485,14 @@ namespace trezor{
     }
 
     boost::optional<epee::wipeable_string> bin_data = m_response->parse_hexstr();
-    if (!bin_data){
+    if (!bin_data || bin_data->size() < PROTO_HEADER_SIZE){
       throw exc::CommunicationException("Response is not well hexcoded");
     }
 
     uint16_t msg_tag;
     uint32_t msg_len;
     deserialize_message_header(bin_data->data(), msg_tag, msg_len);
-    if (bin_data->size() != msg_len + PROTO_HEADER_SIZE){
+    if (bin_data->size() - PROTO_HEADER_SIZE != msg_len){
       throw exc::CommunicationException("Response is not well hexcoded");
     }
 
@@ -1126,7 +1136,12 @@ namespace trezor{
 
     int transferred = 0;
     int r = libusb_interrupt_transfer(m_usb_device_handle, endpoint, (unsigned char*)buff, (int)size, &transferred, 0);
-    CHECK_AND_ASSERT_THROW_MES(r == 0, "Unable to transfer, r: " << r);
+    if (r != 0){
+      if (r == LIBUSB_ERROR_NO_DEVICE){
+        throw exc::NotConnectedException("Trezor was disconnected");
+      }
+      throw exc::CommunicationException(std::string("Unable to write to Trezor: ") + libusb_error_name(r));
+    }
     if (transferred != (int)size){
       throw exc::CommunicationException("Could not transfer chunk");
     }
@@ -1139,7 +1154,12 @@ namespace trezor{
 
     int transferred = 0;
     int r = libusb_interrupt_transfer(m_usb_device_handle, endpoint, (unsigned char*)buff, (int)size, &transferred, 0);
-    CHECK_AND_ASSERT_THROW_MES(r == 0, "Unable to transfer, r: " << r);
+    if (r != 0){
+      if (r == LIBUSB_ERROR_NO_DEVICE){
+        throw exc::NotConnectedException("Trezor was disconnected");
+      }
+      throw exc::CommunicationException(std::string("Unable to read from Trezor: ") + libusb_error_name(r));
+    }
     if (transferred != (int)size){
       throw exc::CommunicationException("Could not read the chunk");
     }

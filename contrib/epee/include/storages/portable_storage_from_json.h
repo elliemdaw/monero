@@ -29,7 +29,8 @@
 #include <boost/utility/string_ref.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include "parserse_base_utils.h"
-#include "file_io_utils.h"
+
+#include "misc_log_ex.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "serialization"
@@ -42,7 +43,7 @@ namespace epee
   {
     namespace json
     {
-#define CHECK_ISSPACE()  if(!epee::misc_utils::parse::isspace(*it)){ ASSERT_MES_AND_THROW("Wrong JSON character at: " << std::string(it, buf_end));}
+#define CHECK_ISSPACE()  if(!epee::misc_utils::parse::isspace(*it)){ ASSERT_MES_AND_THROW("Unexpected character in JSON data");}
 
       /*inline void parse_error()
       {
@@ -146,7 +147,7 @@ namespace epee
                 stg.set_value(name, double(nval), current_section);
               }
               state = match_state_wonder_after_value;
-            }else if(isalpha(*it) )
+            }else if(epee::misc_utils::parse::isalpha(*it) )
             {// could be null, true or false
               boost::string_ref word;
               misc_utils::parse::match_word2(it, buf_end, word);
@@ -167,7 +168,7 @@ namespace epee
             {
               //sub section here
               typename t_storage::hsection new_sec = stg.open_section(name, current_section, true);
-              CHECK_AND_ASSERT_THROW_MES(new_sec, "Failed to insert new section in json: " << std::string(it, buf_end));
+              CHECK_AND_ASSERT_THROW_MES(new_sec, "Failed to insert new section in JSON data");
               run_handler(new_sec, it, buf_end, stg, recursion + 1);
               state = match_state_wonder_after_value;
             }else if(*it == '[')
@@ -188,7 +189,7 @@ namespace epee
           case match_state_wonder_array:
             if(*it == '[')
             {
-              ASSERT_MES_AND_THROW("array of array not suppoerted yet :( sorry"); 
+              ASSERT_MES_AND_THROW("array of array not supported yet :( sorry"); 
               //mean array of array
             }
             if(*it == '{')
@@ -245,7 +246,7 @@ namespace epee
             {
               array_md = array_mode_undifined;
               state = match_state_wonder_after_value;
-            }else if(isalpha(*it) )
+            }else if(epee::misc_utils::parse::isalpha(*it) )
             {// array of booleans
               boost::string_ref word;
               misc_utils::parse::match_word2(it, buf_end, word);
@@ -333,7 +334,7 @@ namespace epee
               }else CHECK_ISSPACE();
               break;
             case array_mode_booleans:
-              if(isalpha(*it) )
+              if(epee::misc_utils::parse::isalpha(*it) )
               {// array of booleans
                 boost::string_ref word;
                 misc_utils::parse::match_word2(it, buf_end, word);
@@ -361,6 +362,8 @@ namespace epee
             ASSERT_MES_AND_THROW("WRONG JSON STATE");
           }
         }
+
+        ASSERT_MES_AND_THROW("Unexpected end of JSON data");
       }
 /*
 {
@@ -398,11 +401,22 @@ namespace epee
         try
         {
           run_handler(nullptr, sec_buf_begin, buff_json.end(), stg, 0);
+
+          CHECK_AND_ASSERT_THROW_MES(
+            sec_buf_begin != buff_json.end() && *sec_buf_begin == '}',
+            "JSON object did not terminate");
+
+          std::string::const_iterator it = sec_buf_begin;
+          for (++it; it != buff_json.end(); ++it)
+            CHECK_AND_ASSERT_THROW_MES(
+              epee::misc_utils::parse::isspace(*it),
+              "Unexpected character after JSON data");
+
           return true;
         }
         catch(const std::exception& ex)
         {
-          MERROR("Failed to parse json, what: " << ex.what());
+          MERROR("Failed to parse json, what: " << misc_utils::parse::transform_to_escape_sequence(ex.what()));
           return false;
         }
         catch(...)

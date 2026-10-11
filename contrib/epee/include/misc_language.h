@@ -29,8 +29,10 @@
 #pragma once
 
 #include <boost/utility/value_init.hpp>
-#include <boost/shared_ptr.hpp>
+
+#include <algorithm>
 #include <vector>
+
 namespace epee
 {
 #define AUTO_VAL_INIT(v)   boost::value_initialized<decltype(v)>()
@@ -71,34 +73,6 @@ namespace misc_utils
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
-
-  struct call_befor_die_base
-  {
-    virtual ~call_befor_die_base() = default;
-  };
-
-  typedef std::shared_ptr<call_befor_die_base> auto_scope_leave_caller;
-
-
-  template<class t_scope_leave_handler>
-  struct call_befor_die: public call_befor_die_base
-  {
-    t_scope_leave_handler m_func;
-    call_befor_die(t_scope_leave_handler f):m_func(f)
-    {}
-    ~call_befor_die()
-    {
-      try { m_func(); }
-      catch (...) { /* ignore */ }
-    }
-  };
-
-  template<class t_scope_leave_handler>
-  auto_scope_leave_caller create_scope_leave_handler(t_scope_leave_handler f)
-  {
-    auto_scope_leave_caller slc = std::make_shared<call_befor_die<t_scope_leave_handler>>(f);
-    return slc;
-  }
 
   template<typename T> struct struct_init: T
   {

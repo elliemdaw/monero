@@ -94,10 +94,10 @@ namespace cryptonote
     void wallet_idle_thread();
 
     //! \return Prompts user for password and verifies against local file. Logs on error and returns `none`
-    boost::optional<tools::password_container> get_and_verify_password() const;
+    boost::optional<tools::password_container> get_and_verify_password(bool *read_failed = nullptr) const;
 
     boost::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm, const crypto::secret_key& recovery_key,
-        bool recover, bool two_random, const std::string &old_language);
+        bool recover, bool two_random, const std::string &old_language, bool is_polyseed, polyseed::data &polyseed, const epee::wipeable_string &seed_pass);
     boost::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm, const cryptonote::account_public_address& address,
         const boost::optional<crypto::secret_key>& spendkey, const crypto::secret_key& viewkey);
     boost::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm,
@@ -110,6 +110,7 @@ namespace cryptonote
     bool spendkey(const std::vector<std::string> &args = std::vector<std::string>());
     bool seed(const std::vector<std::string> &args = std::vector<std::string>());
     bool encrypted_seed(const std::vector<std::string> &args = std::vector<std::string>());
+    bool legacy_seed(const std::vector<std::string> &args = std::vector<std::string>());
     bool restore_height(const std::vector<std::string> &args = std::vector<std::string>());
 
     /*!
@@ -247,9 +248,6 @@ namespace cryptonote
     bool set_ring(const std::vector<std::string>& args);
     bool unset_ring(const std::vector<std::string>& args);
     bool save_known_rings(const std::vector<std::string>& args);
-    bool blackball(const std::vector<std::string>& args);
-    bool unblackball(const std::vector<std::string>& args);
-    bool blackballed(const std::vector<std::string>& args);
     bool freeze(const std::vector<std::string>& args);
     bool thaw(const std::vector<std::string>& args);
     bool frozen(const std::vector<std::string>& args);
@@ -259,18 +257,19 @@ namespace cryptonote
     bool public_nodes(const std::vector<std::string>& args);
     bool welcome(const std::vector<std::string>& args);
     bool version(const std::vector<std::string>& args);
+    bool clear(const std::vector<std::string>& args);
     bool on_unknown_command(const std::vector<std::string>& args);
 
     bool cold_sign_tx(const std::vector<tools::wallet2::pending_tx>& ptx_vector, tools::wallet2::signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::function<bool(const tools::wallet2::signed_tx_set &)> accept_func);
     uint64_t get_daemon_blockchain_height(std::string& err);
     bool try_connect_to_daemon(bool silent = false, uint32_t* version = nullptr);
-    bool ask_wallet_create_if_needed();
+    bool ask_wallet_create_if_needed(const std::string &wallet_dir);
     bool accept_loaded_tx(const std::function<size_t()> get_num_txes, const std::function<const tools::wallet2::tx_construction_data&(size_t)> &get_tx, const std::string &extra_message = std::string());
     bool accept_loaded_tx(const tools::wallet2::unsigned_tx_set &txs);
     bool accept_loaded_tx(const tools::wallet2::signed_tx_set &txs);
     bool process_ring_members(const std::vector<tools::wallet2::pending_tx>& ptx_vector, std::ostream& ostr, bool verbose);
     std::string get_prompt() const;
-    bool print_seed(bool encrypted);
+    bool print_seed(bool encrypted, bool as_legacy_seed);
     void key_images_sync_intern();
     void on_refresh_finished(uint64_t start_height, uint64_t fetched_blocks, bool is_init, bool received_money);
     std::pair<std::string, std::string> show_outputs_line(const std::vector<uint64_t> &heights, uint64_t blockchain_height, uint64_t highlight_idx = std::numeric_limits<uint64_t>::max()) const;
@@ -303,7 +302,7 @@ namespace cryptonote
      * \brief Prints the seed with a nice message
      * \param seed seed to print
      */
-    void print_seed(const epee::wipeable_string &seed);
+    void print_seed(const epee::wipeable_string &seed, bool as_legacy_seed, uint64_t birthday, bool is_encrypted);
 
     /*!
      * \brief Gets the word seed language from the user.
@@ -312,7 +311,7 @@ namespace cryptonote
      * 
      * \return The chosen language.
      */
-    std::string get_mnemonic_language();
+    std::string get_mnemonic_language(bool polyseed);
 
     /*!
      * \brief When --do-not-relay option is specified, save the raw tx hex blob to a file instead of calling m_wallet->commit_tx(ptx).
@@ -373,7 +372,7 @@ namespace cryptonote
 
         if (std::chrono::milliseconds(20) < current_time - m_print_time || force)
         {
-          std::cout << QT_TRANSLATE_NOOP("cryptonote::simple_wallet", "Height ") << height << " / " << m_blockchain_height << '\r' << std::flush;
+          std::cout << "Height " << height << " / " << m_blockchain_height << '\r' << std::flush;
           m_print_time = current_time;
         }
       }
@@ -423,6 +422,7 @@ namespace cryptonote
     bool m_non_deterministic;  // old 2-random generation
     bool m_restoring;           // are we restoring, by whatever method?
     uint64_t m_restore_height;  // optional
+    bool m_use_legacy_seed;
     bool m_do_not_relay;
     bool m_use_english_language_names;
 

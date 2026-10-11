@@ -272,7 +272,7 @@ plot 'stats.csv' index "DATA" using (timecolumn(1,"%Y-%m-%d")):4 with lines, '' 
     char buf[8];
     unsigned int i;
     for (i=0; i<24; i++) {
-      sprintf(buf, "\t%02u:00", i);
+      snprintf(buf, sizeof(buf), "\t%02u:00", i);
       std::cout << buf;
     }
   }
@@ -334,7 +334,7 @@ plot 'stats.csv' index "DATA" using (timecolumn(1,"%Y-%m-%d")):4 with lines, '' 
           maxins = io;
         totins += io;
       }
-      if (do_ringsize) {
+      if (do_ringsize && !tx.vin.empty() && tx.vin[0].type() == typeid(cryptonote::txin_to_key)) {
         const cryptonote::txin_to_key& tx_in_to_key
                        = boost::get<cryptonote::txin_to_key>(tx.vin[0]);
         io = tx_in_to_key.key_offsets.size();

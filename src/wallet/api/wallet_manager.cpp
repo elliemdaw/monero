@@ -45,6 +45,12 @@
 
 namespace Monero {
 
+WalletManager::~WalletManager()
+{}
+
+WalletManagerImpl::~WalletManagerImpl()
+{}
+
 WalletManagerImpl::WalletManagerImpl()
 {
     tools::set_strict_default_file_permissions(true);
@@ -149,6 +155,15 @@ Wallet *WalletManagerImpl::createWalletFromDevice(const std::string &path,
         wallet->setSubaddressLookahead(lookahead->first, lookahead->second);
     }
     wallet->recoverFromDevice(path, password, deviceName);
+    return wallet;
+}
+
+Wallet *WalletManagerImpl::createWalletFromPolyseed(const std::string &path, const std::string &password, NetworkType nettype,
+                                                    const std::string &mnemonic, const std::string &passphrase,
+                                                    bool newWallet, uint64_t restoreHeight, uint64_t kdf_rounds)
+{
+    WalletImpl * wallet = new WalletImpl(nettype, kdf_rounds);
+    wallet->createFromPolyseed(path, password, mnemonic, passphrase, newWallet, restoreHeight);
     return wallet;
 }
 

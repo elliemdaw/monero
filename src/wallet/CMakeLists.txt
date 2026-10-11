@@ -33,6 +33,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(wallet_sources
   wallet2.cpp
   wallet_args.cpp
+  pending_tx_validation.cpp
   ringdb.cpp
   node_rpc_proxy.cpp
   message_store.cpp
@@ -56,7 +57,6 @@ target_link_libraries(wallet
     device_trezor
     net
     ${LMDB_LIBRARY}
-    ${Boost_CHRONO_LIBRARY}
     ${Boost_SERIALIZATION_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
@@ -91,7 +91,6 @@ if(NOT IOS)
       version
       daemonizer
       ${EPEE_READLINE}
-      ${Boost_CHRONO_LIBRARY}
       ${Boost_PROGRAM_OPTIONS_LIBRARY}
       ${Boost_FILESYSTEM_LIBRARY}
       ${Boost_THREAD_LIBRARY}
@@ -104,3 +103,4 @@ if(NOT IOS)
 endif()
 
 add_subdirectory(api)
+add_subdirectory(wallet2_basic)

@@ -43,6 +43,7 @@
 #include "mnemonics/electrum-words.h"
 #include "mnemonics/english.h"
 #include <boost/format.hpp>
+#include <cstring>
 #include <sstream>
 #include <unordered_map>
 
@@ -65,7 +66,7 @@ using namespace cryptonote;
     m_refreshCV.notify_one(); \
     boost::mutex::scoped_lock lock(m_refreshMutex); \
     boost::mutex::scoped_lock lock2(m_refreshMutex2); \
-    epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){ \
+    const epee::scope_guard scope_exit_handler([&](){ \
         /* m_refreshMutex's still locked here */ \
         if (refresh_enabled) \
             startRefresh(); \
@@ -208,7 +209,7 @@ struct Wallet2CallbackImpl : public tools::i_wallet2_callback
                      << ", burnt: " << print_money(burnt)
                      << ", raw_output_value: " << print_money(amount)
                      << ", idx: " << subaddr_index);
-        // do not signal on received tx if wallet is not syncronized completely
+        // do not signal on received tx if wallet is not synchronized completely
         if (m_listener && m_wallet->synchronized()) {
             m_listener->moneyReceived(tx_hash, amount - burnt);
             m_listener->updated();
@@ -224,7 +225,7 @@ struct Wallet2CallbackImpl : public tools::i_wallet2_callback
                      << ", tx: " << tx_hash
                      << ", amount: " << print_money(amount)
                      << ", idx: " << subaddr_index);
-        // do not signal on received tx if wallet is not syncronized completely
+        // do not signal on received tx if wallet is not synchronized completely
         if (m_listener && m_wallet->synchronized()) {
             m_listener->unconfirmedMoneyReceived(tx_hash, amount);
             m_listener->updated();
@@ -240,7 +241,7 @@ struct Wallet2CallbackImpl : public tools::i_wallet2_callback
                      << ", tx: " << tx_hash
                      << ", amount: " << print_money(amount)
                      << ", idx: " << subaddr_index);
-        // do not signal on sent tx if wallet is not syncronized completely
+        // do not signal on sent tx if wallet is not synchronized completely
         if (m_listener && m_wallet->synchronized()) {
             m_listener->moneySpent(tx_hash, amount);
             m_listener->updated();
@@ -363,7 +364,8 @@ bool Wallet::keyValid(const std::string &secret_key_string, const std::string &a
       error = tr("Failed to parse key");
       return false;
   }
-  crypto::secret_key key = *reinterpret_cast<const crypto::secret_key*>(key_data.data());
+  crypto::secret_key key;
+  memcpy(&unwrap(unwrap(key)), key_data.data(), sizeof(key));
 
   // check the key match the given address
   crypto::public_key pkey;
@@ -545,9 +547,15 @@ bool WalletImpl::createWatchOnly(const std::string &path, const std::string &pas
         // Generate view only wallet
         view_wallet->generate(path, password, address, viewkey);
 
-        // Export/Import outputs
-        auto outputs = m_wallet->export_outputs(true/*all*/);
-        view_wallet->import_outputs(outputs);
+        // Preserve complete output metadata
+        tools::wallet2::transfer_container transfers;
+        m_wallet->get_transfers(transfers);
+        for (auto &td : transfers)
+        {
+            memwipe(td.m_multisig_k.data(), td.m_multisig_k.size() * sizeof(td.m_multisig_k[0]));
+            td.m_multisig_k.clear();
+        }
+        view_wallet->import_outputs(std::make_tuple(uint64_t{0}, uint64_t{transfers.size()}, transfers));
 
         // Copy scanned blockchain
         auto bc = m_wallet->export_blockchain();
@@ -613,7 +621,7 @@ bool WalletImpl::recoverFromKeysWithPassword(const std::string &path,
             return false;
         }
         has_spendkey = true;
-        spendkey = *reinterpret_cast<const crypto::secret_key*>(spendkey_data.data());
+        memcpy(&unwrap(unwrap(spendkey)), spendkey_data.data(), sizeof(spendkey));
     }
 
     // parse view secret key
@@ -635,7 +643,7 @@ bool WalletImpl::recoverFromKeysWithPassword(const std::string &path,
           setStatusError(tr("failed to parse secret view key"));
           return false;
       }
-      viewkey = *reinterpret_cast<const crypto::secret_key*>(viewkey_data.data());
+      memcpy(&unwrap(unwrap(viewkey)), viewkey_data.data(), sizeof(viewkey));
     }
     // check the spend and view keys match the given address
     crypto::public_key pkey;
@@ -681,6 +689,7 @@ bool WalletImpl::recoverFromKeysWithPassword(const std::string &path,
         setStatusError(string(tr("failed to generate new wallet: ")) + e.what());
         return false;
     }
+    m_password = password;
     return true;
 }
 
@@ -695,9 +704,34 @@ bool WalletImpl::recoverFromDevice(const std::string &path, const std::string &p
         LOG_PRINT_L1("Generated new wallet from device: " + device_name);
     }
     catch (const std::exception& e) {
-        setStatusError(string(tr("failed to generate new wallet: ")) + e.what());
+        setStatusCritical(string(tr("failed to generate new wallet: ")) + e.what());
         return false;
     }
+    m_password = password;
+    return true;
+}
+
+bool WalletImpl::createFromPolyseed(const std::string &path, const std::string &password, const std::string &seed,
+                                    const std::string &passphrase, bool newWallet, uint64_t restoreHeight)
+{
+    clearStatus();
+    m_recoveringFromSeed = !newWallet;
+    m_recoveringFromDevice = false;
+
+    polyseed::data polyseed(POLYSEED_MONERO);
+
+    try {
+        auto normalized_seed = crypto::ElectrumWords::normalize_mnemonic(seed);
+        normalized_seed.push_back('\0');
+        auto lang = polyseed.decode(normalized_seed.data());
+        m_wallet->set_seed_language(lang.name());
+        m_wallet->generate(path, password, polyseed, passphrase, !newWallet, restoreHeight);
+    }
+    catch (const std::exception &e) {
+        setStatusCritical(e.what());
+        return false;
+    }
+    m_password = password;
     return true;
 }
 
@@ -751,24 +785,42 @@ bool WalletImpl::recover(const std::string &path, const std::string &password, c
     m_recoveringFromDevice = false;
     crypto::secret_key recovery_key;
     std::string old_language;
-    if (!crypto::ElectrumWords::words_to_bytes(seed, recovery_key, old_language)) {
+    bool is_polyseed;
+    polyseed::data polyseed(POLYSEED_MONERO);
+    if (!crypto::ElectrumWords::words_to_bytes_ex(seed, recovery_key, old_language, is_polyseed, polyseed)) {
         setStatusError(tr("Electrum-style word list failed verification"));
         return false;
     }
-    if (!seed_offset.empty())
-    {
-        recovery_key = cryptonote::decrypt_key(recovery_key, seed_offset);
+    if (is_polyseed) {
+        try {
+            const polyseed::language &lang = polyseed::get_lang_by_name(old_language);
+            m_wallet->set_seed_language(lang.name());
+            m_wallet->generate(path, password, polyseed, seed_offset, true, m_wallet->get_refresh_from_block_height());
+            // Note to callers of this 'recover' method: Having a need to OVERRIDE the refresh height derived
+            // from the Polyseed birthday should be an exception, usually you do NOT set the restore height
+            // yourself beforehand if a Polyseed gets used.
+            m_password = password;
+        }
+        catch (const std::exception &e) {
+            setStatusCritical(e.what());
+            return false;
+        }
     }
+    else {
+        if (!seed_offset.empty())
+            recovery_key = cryptonote::decrypt_key(recovery_key, seed_offset);
 
-    if (old_language == crypto::ElectrumWords::old_language_name)
-        old_language = Language::English().get_language_name();
+        if (old_language == crypto::ElectrumWords::old_language_name)
+            old_language = Language::English().get_language_name();
 
-    try {
-        m_wallet->set_seed_language(old_language);
-        m_wallet->generate(path, password, recovery_key, true, false);
+        try {
+            m_wallet->set_seed_language(old_language);
+            m_wallet->generate(path, password, recovery_key, true, false);
+            m_password = password;
 
-    } catch (const std::exception &e) {
-        setStatusCritical(e.what());
+        } catch (const std::exception &e) {
+            setStatusCritical(e.what());
+        }
     }
     return status() == Status_Ok;
 }
@@ -807,8 +859,58 @@ std::string WalletImpl::seed(const std::string& seed_offset) const
         return std::string();
     epee::wipeable_string seed;
     if (m_wallet)
-        m_wallet->get_seed(seed, seed_offset);
+        m_wallet->get_seed(seed, seed_offset, m_wallet->is_polyseed());
     return std::string(seed.data(), seed.size()); // TODO
+}
+
+bool WalletImpl::getPolyseed(std::string &seed_words, uint64_t &birthday, bool &is_encrypted) const
+{
+    epee::wipeable_string seed_words_epee;
+    clearStatus();
+
+    if (!m_wallet) {
+        return false;
+    }
+
+    bool result = m_wallet->get_polyseed(seed_words_epee, birthday, is_encrypted);
+
+    seed_words.assign(seed_words_epee.data(), seed_words_epee.size());
+
+    return result;
+}
+
+std::vector<std::pair<std::string, std::string>> Wallet::getPolyseedLanguages()
+{
+    std::vector<std::pair<std::string, std::string>> languages;
+
+    auto langs = polyseed::get_langs();
+    for (const auto &lang : langs) {
+        languages.emplace_back(std::pair<std::string, std::string>(lang.name_en(), lang.name()));
+    }
+
+    return languages;
+}
+
+bool Wallet::createPolyseed(std::string &seed_words, std::string &err, const std::string &language)
+{
+    epee::wipeable_string seed_words_epee(seed_words.c_str(), seed_words.size());
+
+    try {
+        polyseed::data polyseed(POLYSEED_MONERO);
+        const polyseed::language &lang = polyseed::get_lang_by_name(language);
+        if (!lang.valid()) {
+            throw std::runtime_error("invalid Polyseed language");
+        }
+        polyseed.create(0, lang);
+        polyseed.encode(lang, seed_words_epee);
+        seed_words.assign(seed_words_epee.data(), seed_words_epee.size());
+    }
+    catch (const std::exception &e) {
+        err = e.what();
+        return false;
+    }
+
+    return true;
 }
 
 std::string WalletImpl::getSeedLanguage() const
@@ -969,7 +1071,19 @@ bool WalletImpl::init(const std::string &daemon_address, uint64_t upper_transact
     clearStatus();
     if(daemon_username != "")
         m_daemon_login.emplace(daemon_username, daemon_password);
+    else
+        m_daemon_login = boost::none;
     return doInit(daemon_address, proxy_address, upper_transaction_size_limit, use_ssl);
+}
+
+void WalletImpl::allowMismatchedDaemonVersion(bool allow_mismatch)
+{
+    m_wallet->allow_mismatched_daemon_version(allow_mismatch);
+}
+
+void WalletImpl::setRingDatabase(const std::string &path)
+{
+    m_wallet->set_ring_database(path);
 }
 
 void WalletImpl::setRefreshFromBlockHeight(uint64_t refresh_from_block_height)
@@ -1069,7 +1183,7 @@ bool WalletImpl::synchronized() const
 bool WalletImpl::refresh()
 {
     clearStatus();
-    //TODO: make doRefresh return bool to know whether the error occured during refresh or not
+    //TODO: make doRefresh return bool to know whether the error occurred during refresh or not
     //otherwise one may try, say, to send transaction, transfer fails and this method returns false
     doRefresh();
     return status() == Status_Ok;
@@ -1409,13 +1523,13 @@ size_t WalletImpl::numSubaddresses(uint32_t accountIndex) const
 }
 void WalletImpl::addSubaddress(uint32_t accountIndex, const std::string& label)
 {
-    if (checkBackgroundSync("cannot add subbaddress"))
+    if (checkBackgroundSync("cannot add subaddress"))
         return;
     m_wallet->add_subaddress(accountIndex, label);
 }
 std::string WalletImpl::getSubaddressLabel(uint32_t accountIndex, uint32_t addressIndex) const
 {
-    if (checkBackgroundSync("cannot get subbaddress label"))
+    if (checkBackgroundSync("cannot get subaddress label"))
         return "";
     try
     {
@@ -1430,7 +1544,7 @@ std::string WalletImpl::getSubaddressLabel(uint32_t accountIndex, uint32_t addre
 }
 void WalletImpl::setSubaddressLabel(uint32_t accountIndex, uint32_t addressIndex, const std::string &label)
 {
-    if (checkBackgroundSync("cannot set subbaddress label"))
+    if (checkBackgroundSync("cannot set subaddress label"))
         return;
     try
     {
@@ -1608,7 +1722,7 @@ PendingTransaction* WalletImpl::restoreMultisigTransaction(const string& signDat
 }
 
 // TODO:
-// 1 - properly handle payment id (add another menthod with explicit 'payment_id' param)
+// 1 - properly handle payment id (add another method with explicit 'payment_id' param)
 // 2 - check / design how "Transaction" can be single interface
 // (instead of few different data structures within wallet2 implementation:
 //    - pending_tx;
@@ -1963,7 +2077,8 @@ bool WalletImpl::setUserNote(const std::string &txid, const std::string &note)
     cryptonote::blobdata txid_data;
     if(!epee::string_tools::parse_hexstr_to_binbuff(txid, txid_data) || txid_data.size() != sizeof(crypto::hash))
       return false;
-    const crypto::hash htxid = *reinterpret_cast<const crypto::hash*>(txid_data.data());
+    crypto::hash htxid;
+    memcpy(&htxid, txid_data.data(), sizeof(htxid));
 
     m_wallet->set_tx_note(htxid, note);
     return true;
@@ -1976,7 +2091,8 @@ std::string WalletImpl::getUserNote(const std::string &txid) const
     cryptonote::blobdata txid_data;
     if(!epee::string_tools::parse_hexstr_to_binbuff(txid, txid_data) || txid_data.size() != sizeof(crypto::hash))
       return "";
-    const crypto::hash htxid = *reinterpret_cast<const crypto::hash*>(txid_data.data());
+    crypto::hash htxid;
+    memcpy(&htxid, txid_data.data(), sizeof(htxid));
 
     return m_wallet->get_tx_note(htxid);
 }
@@ -2246,12 +2362,25 @@ std::string WalletImpl::signMessage(const std::string &message, const std::strin
 
 bool WalletImpl::verifySignedMessage(const std::string &message, const std::string &address, const std::string &signature) const
 {
+  return verifySignedMessageWithDetails(message, address, signature).valid;
+}
+
+Wallet::MessageSignatureResult WalletImpl::verifySignedMessageWithDetails(const std::string &message, const std::string &address, const std::string &signature) const
+{
   cryptonote::address_parse_info info;
 
   if (!cryptonote::get_account_address_from_str(info, m_wallet->nettype(), address))
-    return false;
+    return {};
 
-  return m_wallet->verify(message, info.address, signature).valid;
+  const tools::wallet2::message_signature_result_t result = m_wallet->verify(message, info.address, signature);
+  MessageSignatureType type = MessageSignatureType_Invalid;
+  switch (result.type)
+  {
+    case tools::wallet2::sign_with_spend_key: type = MessageSignatureType_Spend; break;
+    case tools::wallet2::sign_with_view_key: type = MessageSignatureType_View; break;
+    default: break;
+  }
+  return {result.valid, result.version, result.old, type};
 }
 
 std::string WalletImpl::signMultisigParticipant(const std::string &message) const
@@ -2502,6 +2631,9 @@ void WalletImpl::pendingTxPostProcess(PendingTransactionImpl * pending)
   tools::wallet2::signed_tx_set exported_txs;
   std::vector<cryptonote::address_parse_info> dsts_info;
 
+  // NOTE: We expect `cold_sign_tx` to validate `pending->m_pending_tx` with `sanity_check_pending_tx`.
+  // It is not possible to pre-validate here because the pending tx may be 'half-formed' at this point (e.g.
+  // trezor makes a tx proposal with no key images and the cold wallet has to supply those).
   m_wallet->cold_sign_tx(pending->m_pending_tx, exported_txs, dsts_info, pending->m_tx_device_aux);
   pending->m_key_images = exported_txs.key_images;
   pending->m_pending_tx = exported_txs.ptx;
@@ -2602,88 +2734,6 @@ void WalletImpl::hardForkInfo(uint8_t &version, uint64_t &earliest_height) const
 bool WalletImpl::useForkRules(uint8_t version, int64_t early_blocks) const 
 {
     return m_wallet->use_fork_rules(version,early_blocks);
-}
-
-bool WalletImpl::blackballOutputs(const std::vector<std::string> &outputs, bool add)
-{
-    std::vector<std::pair<uint64_t, uint64_t>> raw_outputs;
-    raw_outputs.reserve(outputs.size());
-    uint64_t amount = std::numeric_limits<uint64_t>::max(), offset, num_offsets;
-    for (const std::string &str: outputs)
-    {
-        if (sscanf(str.c_str(), "@%" PRIu64, &amount) == 1)
-          continue;
-        if (amount == std::numeric_limits<uint64_t>::max())
-        {
-          setStatusError("First line is not an amount");
-          return true;
-        }
-        if (sscanf(str.c_str(), "%" PRIu64 "*%" PRIu64, &offset, &num_offsets) == 2 && num_offsets <= std::numeric_limits<uint64_t>::max() - offset)
-        {
-          while (num_offsets--)
-            raw_outputs.push_back(std::make_pair(amount, offset++));
-        }
-        else if (sscanf(str.c_str(), "%" PRIu64, &offset) == 1)
-        {
-          raw_outputs.push_back(std::make_pair(amount, offset));
-        }
-        else
-        {
-          setStatusError(tr("Invalid output: ") + str);
-          return false;
-        }
-    }
-    bool ret = m_wallet->set_blackballed_outputs(raw_outputs, add);
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark outputs as spent"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::blackballOutput(const std::string &amount, const std::string &offset)
-{
-    uint64_t raw_amount, raw_offset;
-    if (!epee::string_tools::get_xtype_from_string(raw_amount, amount))
-    {
-        setStatusError(tr("Failed to parse output amount"));
-        return false;
-    }
-    if (!epee::string_tools::get_xtype_from_string(raw_offset, offset))
-    {
-        setStatusError(tr("Failed to parse output offset"));
-        return false;
-    }
-    bool ret = m_wallet->blackball_output(std::make_pair(raw_amount, raw_offset));
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark output as spent"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::unblackballOutput(const std::string &amount, const std::string &offset)
-{
-    uint64_t raw_amount, raw_offset;
-    if (!epee::string_tools::get_xtype_from_string(raw_amount, amount))
-    {
-        setStatusError(tr("Failed to parse output amount"));
-        return false;
-    }
-    if (!epee::string_tools::get_xtype_from_string(raw_offset, offset))
-    {
-        setStatusError(tr("Failed to parse output offset"));
-        return false;
-    }
-    bool ret = m_wallet->unblackball_output(std::make_pair(raw_amount, raw_offset));
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark output as unspent"));
-        return false;
-    }
-    return true;
 }
 
 bool WalletImpl::getRing(const std::string &key_image, std::vector<uint64_t> &ring) const

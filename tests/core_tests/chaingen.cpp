@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2024, The Monero Project
+// Copyright (c) 2014-2026, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -81,6 +81,7 @@ namespace
   public:
     TestDB() { m_open = true; }
 
+    using cryptonote::BaseTestDB::add_block;
     virtual void add_block( const cryptonote::block& blk
         , size_t block_weight
         , uint64_t long_term_block_weight
@@ -132,7 +133,7 @@ namespace
       return blocks[blocks.size()-1].bl;
     }
 
-    virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { if (!blocks.empty()) blocks.pop_back(); }
+    virtual void pop_block(cryptonote::block &, std::vector<cryptonote::transaction> *) override { if (!blocks.empty()) blocks.pop_back(); }
     virtual void set_hard_fork_version(uint64_t height, uint8_t version) override { if (height >= hf.size()) hf.resize(height + 1); hf[height] = version; }
     virtual uint8_t get_hard_fork_version(uint64_t height) const override { if (height >= hf.size()) return 255; return hf[height]; }
 
@@ -594,7 +595,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             ts.rct = false;
             ts.mask = rct::identity();  // non-rct has identity mask by definition
 
-            rct::key comm = rct::zeroCommit(ts.amount);
+            rct::key comm = rct::zeroCommitVartime(ts.amount);
             for(auto & ot : ts.outputs)
               ot.second.mask = comm;
 
